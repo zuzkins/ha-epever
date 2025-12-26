@@ -1,0 +1,15 @@
+__pycache__
+.cursor
+.storage
+blueprints
+custom_components/.DS_Store
+.HA_VERSION
+.ha_run.lock
+automations.yaml
+configuration.yaml
+home-assistant.log
+home-assistant.log.1
+home-assistant_v2.db
+scenes.yaml
+scripts.yaml
+secrets.yaml

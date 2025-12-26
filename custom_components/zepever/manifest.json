@@ -1,0 +1,11 @@
+{
+  "domain": "zepever",
+  "name": "Epever",
+  "codeowners": ["@zuzkins"],
+  "config_flow": true,
+  "documentation": "https://github.com/zuzkins/zepever",
+  "iot_class": "local_polling",
+  "quality_scale": "bronze",
+  "requirements": ["pymodbus==3.11.2"],
+  "version": "0.1.0"
+}
