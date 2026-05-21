@@ -79,12 +79,14 @@ def get_all_data(
 
         data: dict[str, Any] = {}
 
-        # Read realtime data registers 0x3100 - 0x311A in one transaction.
-        # count=27 spans through SOC at offset 26 (0x311A).
+        # Read realtime data registers 0x3100 - 0x3112 (count=19). Some
+        # Epever firmware silently truncates the response past this window
+        # (observed: a count=27 read returns only 19 registers), so we keep
+        # this read small and fetch later registers separately.
         result = client.read_input_registers(
-            address=0x3100, count=27, device_id=unit_id
+            address=0x3100, count=19, device_id=unit_id
         )
-        if not result.isError():
+        if not result.isError() and len(result.registers) >= 19:
             registers = result.registers
 
             # PV array data (offset from 0x3100)
@@ -98,11 +100,8 @@ def get_all_data(
             data["battery_power"] = _value32(
                 registers[6], registers[7]
             )  # 0x3106-0x3107
-            # data["battery_temperature"] = _value16(registers[16])  # 0x3110
-            soc = registers[26]  # 0x311A, percentage with no scaling
-            if 0 <= soc <= 100:
-                data["battery_state_of_charge"] = soc
-            # data["remote_battery_temperature"] = _value16(registers[29])  # 0x311D
+            # Internal battery sensor on the controller body.
+            data["internal_battery_temperature"] = _value16(registers[16])  # 0x3110
 
             # Load data
             data["load_voltage"] = _value16(registers[12])  # 0x310C
@@ -111,6 +110,26 @@ def get_all_data(
 
             # Device temperature
             data["device_temperature"] = _value16(registers[17])  # 0x3111
+
+        # Next batch of realtime data, fetched in a separate transaction
+        # because some firmware can't serve it together with the earlier
+        # block (see comment above). Tolerate failure so other sensors
+        # still come online on firmware variants that don't support it.
+        result = client.read_input_registers(
+            address=0x311A, count=2, device_id=unit_id
+        )
+        if not result.isError() and len(result.registers) >= 2:
+            soc = result.registers[0]  # 0x311A, percentage with no scaling
+            if 0 <= soc <= 100:
+                data["battery_state_of_charge"] = soc
+            # The firmware returns a sentinel value (commonly 0) when no
+            # RTS probe is connected. We have no reliable way to distinguish
+            # that from a valid reading at the same temperature, so the
+            # value is exposed as-is and only obviously bogus readings are
+            # rejected by a wide sanity range.
+            remote_temp = _value16(result.registers[1])
+            if -100 <= remote_temp <= 150:
+                data["remote_battery_temperature"] = remote_temp
 
         # Read status registers (0x3200 - 0x3202)
         result = client.read_input_registers(address=0x3200, count=3, device_id=unit_id)
@@ -208,7 +227,7 @@ def get_all_data(
 
         return data
 
-    except (ConnectionError, TimeoutError, ValueError):
+    except (ConnectionError, TimeoutError, ValueError, IndexError):
         return None
     finally:
         client.close()
