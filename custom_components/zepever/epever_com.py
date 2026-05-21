@@ -190,40 +190,26 @@ def get_all_data(
             }
             # data["discharging_equipment_status"] = discharging_status
 
-        # Read energy registers (0x3300 - 0x3311)
+        # All energy counters (0x3304 - 0x3313) in one read. 32-bit values
+        # in consecutive lo/hi pairs, scaled by 100 (kWh). 0x3300-0x3303
+        # carry today's voltage min/max stats which we skip.
         result = client.read_input_registers(
-            address=0x3300, count=18, device_id=unit_id
+            address=0x3304, count=16, device_id=unit_id
         )
-        if not result.isError():
-            energy_registers = result.registers
+        if not result.isError() and len(result.registers) >= 16:
+            er = result.registers
 
-            # Generated energy
-            data["generated_energy_today"] = _value32(
-                energy_registers[0], energy_registers[1]
-            )  # 0x3300-0x3301
-            data["generated_energy_this_month"] = _value32(
-                energy_registers[2], energy_registers[3]
-            )  # 0x3302-0x3303
-            data["generated_energy_this_year"] = _value32(
-                energy_registers[4], energy_registers[5]
-            )  # 0x3304-0x3305
-            data["total_generated_energy"] = _value32(
-                energy_registers[6], energy_registers[7]
-            )  # 0x3306-0x3307
+            # Consumed energy (load)
+            data["consumed_energy_today"] = _value32(er[0], er[1])  # 0x3304-0x3305
+            data["consumed_energy_this_month"] = _value32(er[2], er[3])  # 0x3306-0x3307
+            data["consumed_energy_this_year"] = _value32(er[4], er[5])  # 0x3308-0x3309
+            data["total_consumed_energy"] = _value32(er[6], er[7])  # 0x330A-0x330B
 
-            # Consumed energy
-            data["consumed_energy_today"] = _value32(
-                energy_registers[10], energy_registers[11]
-            )  # 0x330A-0x330B
-            data["consumed_energy_this_month"] = _value32(
-                energy_registers[12], energy_registers[13]
-            )  # 0x330C-0x330D
-            data["consumed_energy_this_year"] = _value32(
-                energy_registers[14], energy_registers[15]
-            )  # 0x330E-0x330F
-            data["total_consumed_energy"] = _value32(
-                energy_registers[16], energy_registers[17]
-            )  # 0x3310-0x3311
+            # Generated energy (PV)
+            data["generated_energy_today"] = _value32(er[8], er[9])  # 0x330C-0x330D
+            data["generated_energy_this_month"] = _value32(er[10], er[11])  # 0x330E-0x330F
+            data["generated_energy_this_year"] = _value32(er[12], er[13])  # 0x3310-0x3311
+            data["total_generated_energy"] = _value32(er[14], er[15])  # 0x3312-0x3313
 
         return data
 

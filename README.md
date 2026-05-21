@@ -69,6 +69,8 @@ Home Assistant integration for Epever solar charge controllers via Modbus TCP (W
 - **Internal Battery Temperature** - Battery temperature from the controller's internal sensor
 - **Remote Battery Temperature** - Battery temperature from the external Remote Temperature Sensor (RTS) probe
 - **Battery State of Charge** - Battery charge level (percentage)
+- **Generated Energy Today / This Month / This Year / Total** - Cumulative PV-produced energy (kWh)
+- **Consumed Energy Today / This Month / This Year / Total** - Cumulative load-consumed energy (kWh)
 
 
 ## Troubleshooting
