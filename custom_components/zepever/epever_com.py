@@ -211,6 +211,16 @@ def get_all_data(
             data["generated_energy_this_year"] = _value32(er[12], er[13])  # 0x3310-0x3311
             data["total_generated_energy"] = _value32(er[14], er[15])  # 0x3312-0x3313
 
+        # Live battery temperature (RTS-aware, falls back to internal sensor
+        # or a 25.00 °C sentinel when no source is wired) and ambient
+        # temperature from the controller's statistical block.
+        result = client.read_input_registers(
+            address=0x331D, count=2, device_id=unit_id
+        )
+        if not result.isError() and len(result.registers) >= 2:
+            data["battery_temperature"] = _value16(result.registers[0])  # 0x331D
+            data["ambient_temperature"] = _value16(result.registers[1])  # 0x331E
+
         return data
 
     except (ConnectionError, TimeoutError, ValueError, IndexError):
