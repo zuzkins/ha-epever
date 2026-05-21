@@ -26,17 +26,11 @@ def get_pv_voltage(
         if not client.connect():
             return None
 
-        print("Connected to Epever device")
-
         # Send initialization sequence (required by Epever devices)
         client.send(bytes.fromhex("20020000"))
 
-        print("Sent initialization sequence")
-
         # Read input register 0x3100 for PV voltage
         result = client.read_input_registers(address=0x3100, count=19)
-
-        print(f"PV voltage: {result}\n")
 
         if result.isError():
             return None
@@ -44,8 +38,7 @@ def get_pv_voltage(
         # PV voltage is scaled by dividing by 100 (register value / 100 = volts)
         return result.registers[0] / 100.0
 
-    except (ConnectionError, TimeoutError, ValueError) as e:
-        print(f"Error: {e}")
+    except (ConnectionError, TimeoutError, ValueError):
         return None
     finally:
         client.close()
