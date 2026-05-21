@@ -81,7 +81,7 @@ def get_all_data(
 
         # Read realtime data registers (0x3100 - 0x311D)
         result = client.read_input_registers(
-            address=0x3100, count=19, device_id=unit_id
+            address=0x3100, count=27, device_id=unit_id
         )
         if not result.isError():
             registers = result.registers
@@ -98,7 +98,7 @@ def get_all_data(
                 registers[6], registers[7]
             )  # 0x3106-0x3107
             # data["battery_temperature"] = _value16(registers[16])  # 0x3110
-            # data["battery_state_of_charge"] = registers[26]  # 0x311A (no scaling)
+            data["battery_state_of_charge"] = registers[26]  # 0x311A (no scaling)
             # data["remote_battery_temperature"] = _value16(registers[29])  # 0x311D
 
             # Load data
