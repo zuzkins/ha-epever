@@ -10,17 +10,16 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    PERCENTAGE,
     UnitOfElectricCurrent,
     UnitOfElectricPotential,
     UnitOfPower,
     UnitOfTemperature,
-    PERCENTAGE,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-
 
 from .const import CONF_DEVICE_NAME, DOMAIN
 from .coordinator import EpeverDataUpdateCoordinator
@@ -112,8 +111,10 @@ SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.BATTERY,
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
-    )
+        suggested_display_precision=0,
+    ),
 )
+
 
 async def async_setup_entry(
     hass: HomeAssistant,

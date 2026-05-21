@@ -79,7 +79,8 @@ def get_all_data(
 
         data: dict[str, Any] = {}
 
-        # Read realtime data registers (0x3100 - 0x311D)
+        # Read realtime data registers 0x3100 - 0x311A in one transaction.
+        # count=27 spans through SOC at offset 26 (0x311A).
         result = client.read_input_registers(
             address=0x3100, count=27, device_id=unit_id
         )
@@ -98,7 +99,9 @@ def get_all_data(
                 registers[6], registers[7]
             )  # 0x3106-0x3107
             # data["battery_temperature"] = _value16(registers[16])  # 0x3110
-            data["battery_state_of_charge"] = registers[26]  # 0x311A (no scaling)
+            soc = registers[26]  # 0x311A, percentage with no scaling
+            if 0 <= soc <= 100:
+                data["battery_state_of_charge"] = soc
             # data["remote_battery_temperature"] = _value16(registers[29])  # 0x311D
 
             # Load data

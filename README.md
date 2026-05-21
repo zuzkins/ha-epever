@@ -66,6 +66,7 @@ Home Assistant integration for Epever solar charge controllers via Modbus TCP (W
 - **Load Current** - Load output current
 - **Load Power** - Load power consumption
 - **Device Temperature** - Charge controller temperature
+- **Battery State of Charge** - Battery charge level (percentage)
 
 
 ## Troubleshooting
