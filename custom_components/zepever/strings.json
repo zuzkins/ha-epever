@@ -1,4 +1,20 @@
 {
+  "services": {
+    "force_mppt_reacquire": {
+      "name": "Force MPPT reacquire",
+      "description": "Experimental: briefly halts PV production (by temporarily lowering the power-component temperature limit) to provoke a fresh MPPT sweep. Rate-limited to once per minute.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The Epever controller to toggle. May be omitted when only one is set up."
+        },
+        "off_seconds": {
+          "name": "Off time",
+          "description": "How long production stays halted before the limit is restored."
+        }
+      }
+    }
+  },
   "config": {
     "abort": {
       "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"

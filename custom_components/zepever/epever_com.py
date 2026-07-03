@@ -1,9 +1,39 @@
 """Simple Modbus communication for Epever devices."""
 
+import logging
+import time
 from typing import Any
 
 from pymodbus import FramerType
 from pymodbus.client import ModbusTcpClient
+
+_LOGGER = logging.getLogger(__name__)
+
+# Magic init sequence required by the Epever WiFi dongle after connect,
+# before any read/write.
+_INIT_SEQUENCE = bytes.fromhex("20020000")
+
+# Controller inner temperature upper limit (x100 °C). Lowering it below the
+# actual controller temperature fakes an over-temperature condition: the
+# protection loop (evaluated roughly every 10 s) halts PV production and
+# releases the array to open-circuit voltage; restoring the original value
+# clears the fault and the controller re-engages with a fresh MPPT sweep
+# (~30-60 s). Verified on the test device 2026-07-03. The documented coil 0
+# "charging device on/off" and 0x901B (power component limit, works on BN
+# units) are both no-ops on Tracer AN hardware — see
+# docs/epever_mppt_reacquire_experiment.md.
+TEMP_LIMIT_REGISTER = 0x9019
+TEMP_LIMIT_DISABLE_VALUE = 1000  # 10.00 °C
+TEMP_LIMIT_DEFAULT = 8500  # 85.00 °C factory default, probe-confirmed
+_TEMP_LIMIT_SANE_RANGE = (6000, 10000)
+
+# Discrete input: "over temperature inside the device" — flips on when the
+# protection trips, cleanly and irradiance-independently.
+OVER_TEMP_FLAG_ADDRESS = 0x2000
+
+_TRIP_TIMEOUT_SECONDS = 30
+_TRIP_POLL_SECONDS = 2
+_RESTORE_ATTEMPTS = 5
 
 
 def get_pv_voltage(
@@ -27,7 +57,7 @@ def get_pv_voltage(
             return None
 
         # Send initialization sequence (required by Epever devices)
-        client.send(bytes.fromhex("20020000"))
+        client.send(_INIT_SEQUENCE)
 
         # Read input register 0x3100 for PV voltage
         result = client.read_input_registers(address=0x3100, count=19)
@@ -75,7 +105,7 @@ def get_all_data(
             return None
 
         # Send initialization sequence (required by Epever devices)
-        client.send(bytes.fromhex("20020000"))
+        client.send(_INIT_SEQUENCE)
 
         data: dict[str, Any] = {}
 
@@ -225,5 +255,220 @@ def get_all_data(
 
     except (ConnectionError, TimeoutError, ValueError, IndexError):
         return None
+    finally:
+        client.close()
+
+
+def _pv_snapshot(client: ModbusTcpClient, unit_id: int) -> dict[str, float] | None:
+    """Read PV voltage/current/power for before/after experiment logging."""
+    try:
+        result = client.read_input_registers(address=0x3100, count=4, device_id=unit_id)
+    except (ConnectionError, TimeoutError, ValueError):
+        return None
+    if result.isError() or len(result.registers) < 4:
+        return None
+    registers = result.registers
+    return {
+        "pv_voltage": _value16(registers[0]),
+        "pv_current": _value16(registers[1]),
+        "pv_power": _value32(registers[2], registers[3]),
+    }
+
+
+def _read_temp_limit(client: ModbusTcpClient, unit_id: int) -> int | None:
+    """Read the raw controller inner temperature upper limit register."""
+    try:
+        result = client.read_holding_registers(
+            address=TEMP_LIMIT_REGISTER, count=1, device_id=unit_id
+        )
+    except (ConnectionError, TimeoutError, ValueError):
+        return None
+    if result.isError() or len(result.registers) < 1:
+        return None
+    return result.registers[0]
+
+
+def _over_temp_tripped(client: ModbusTcpClient, unit_id: int) -> bool | None:
+    """Read the over-temperature discrete input; None if unreadable."""
+    try:
+        result = client.read_discrete_inputs(
+            address=OVER_TEMP_FLAG_ADDRESS, count=1, device_id=unit_id
+        )
+    except (ConnectionError, TimeoutError, ValueError):
+        return None
+    if result.isError() or not result.bits:
+        return None
+    return result.bits[0]
+
+
+def _restore_temp_limit(client: ModbusTcpClient, unit_id: int, value: int) -> None:
+    """Write the temperature limit back and verify by readback, retrying hard.
+
+    Production is halted when this is called; giving up leaves the
+    controller convinced it is overheating (persists across reboots), so
+    retry with reconnects and catch everything in between attempts. A write
+    ACK alone is not trusted — this firmware echoes writes it ignores — so
+    every attempt is verified with a readback.
+    """
+    last_error: BaseException | str | None = None
+    for attempt in range(1, _RESTORE_ATTEMPTS + 1):
+        try:
+            if not client.connect():
+                raise ConnectionError("reconnect failed")
+            result = client.write_register(
+                TEMP_LIMIT_REGISTER, value, device_id=unit_id
+            )
+            if result.isError():
+                last_error = str(result)
+            else:
+                readback = _read_temp_limit(client, unit_id)
+                if readback == value:
+                    if attempt > 1:
+                        _LOGGER.warning(
+                            "Temperature limit restored on attempt %d/%d",
+                            attempt,
+                            _RESTORE_ATTEMPTS,
+                        )
+                    return
+                last_error = f"readback {readback} != {value}"
+        except Exception as err:  # noqa: BLE001 - must keep retrying
+            last_error = err
+            # Force a fresh connection (and re-init) for the next attempt.
+            client.close()
+            if client.connect():
+                client.send(_INIT_SEQUENCE)
+        _LOGGER.warning(
+            "Restore temperature limit attempt %d/%d failed: %s",
+            attempt,
+            _RESTORE_ATTEMPTS,
+            last_error,
+        )
+        time.sleep(1)
+    raise RuntimeError(
+        f"PV PRODUCTION IS STILL HALTED: could not restore holding register "
+        f"0x{TEMP_LIMIT_REGISTER:04X} to {value} after {_RESTORE_ATTEMPTS} "
+        f"attempts (last error: {last_error}). The controller thinks it is "
+        f"overheating and this persists across reboots — write {value} to "
+        f"0x{TEMP_LIMIT_REGISTER:04X} manually to recover."
+    )
+
+
+def force_mppt_reacquire(
+    host: str, port: int, unit_id: int = 1, off_seconds: int = 5
+) -> dict[str, Any]:
+    """Briefly halt PV production to provoke an MPPT re-sweep.
+
+    Lowers the controller inner temperature upper limit (0x9019) to fake an
+    over-temperature condition, waits for the protection to trip (the
+    firmware evaluates it roughly every 10 s), dwells off_seconds in the
+    halted state, then restores the original value. The controller
+    re-engages with a fresh MPPT sweep within ~a minute of the restore.
+    Experimental, see docs/epever_mppt_reacquire_experiment.md. Holds a
+    single connection for the whole toggle so a reconnect failure mid-window
+    cannot strand the controller in the halted state. The register is
+    flash-backed: intended for sporadic manual use, not tight loops.
+
+    Returns:
+        Dict with the original limit, seconds until the protection tripped,
+        and "before"/"mid"/"after" PV snapshots (snapshots may be None).
+
+    Raises:
+        ConnectionError: if the device is unreachable.
+        RuntimeError: if a write fails or the protection never trips; the
+            message says whether the temperature limit was left lowered.
+    """
+    client = ModbusTcpClient(host=host, port=port, retries=1, framer=FramerType.RTU)
+    try:
+        if not client.connect():
+            raise ConnectionError(f"Could not connect to {host}:{port}")
+        client.send(_INIT_SEQUENCE)
+
+        original = _read_temp_limit(client, unit_id)
+        if original is None:
+            raise RuntimeError(
+                f"Could not read holding register 0x{TEMP_LIMIT_REGISTER:04X}; "
+                f"aborting (nothing was written)"
+            )
+        if original == TEMP_LIMIT_DISABLE_VALUE:
+            # Leftover from a previous toggle that failed to restore.
+            _LOGGER.warning(
+                "0x%04X reads the disable value %d - previous toggle did not "
+                "restore; using the factory default %d as restore target",
+                TEMP_LIMIT_REGISTER,
+                TEMP_LIMIT_DISABLE_VALUE,
+                TEMP_LIMIT_DEFAULT,
+            )
+            original = TEMP_LIMIT_DEFAULT
+        elif not _TEMP_LIMIT_SANE_RANGE[0] <= original <= _TEMP_LIMIT_SANE_RANGE[1]:
+            raise RuntimeError(
+                f"0x{TEMP_LIMIT_REGISTER:04X} reads {original}, outside the "
+                f"sane range {_TEMP_LIMIT_SANE_RANGE}; refusing to touch it "
+                f"(nothing was written)"
+            )
+
+        before = _pv_snapshot(client, unit_id)
+
+        result = client.write_register(
+            TEMP_LIMIT_REGISTER, TEMP_LIMIT_DISABLE_VALUE, device_id=unit_id
+        )
+        if result.isError():
+            raise RuntimeError(
+                f"Device rejected the disable write (temperature limit "
+                f"unchanged): {result}"
+            )
+        _LOGGER.info(
+            "Temperature limit lowered to %d (original %d, before: %s); "
+            "waiting for the protection to trip",
+            TEMP_LIMIT_DISABLE_VALUE,
+            original,
+            before,
+        )
+
+        mid = None
+        trip_seconds: float | None = None
+        try:
+            readback = _read_temp_limit(client, unit_id)
+            if readback != TEMP_LIMIT_DISABLE_VALUE:
+                raise RuntimeError(
+                    f"Disable write did not stick: 0x{TEMP_LIMIT_REGISTER:04X} "
+                    f"reads {readback} after writing {TEMP_LIMIT_DISABLE_VALUE}"
+                )
+            # The protection loop only evaluates every ~10 s; poll the
+            # over-temperature flag instead of sleeping blind.
+            started = time.monotonic()
+            while time.monotonic() - started < _TRIP_TIMEOUT_SECONDS:
+                time.sleep(_TRIP_POLL_SECONDS)
+                if _over_temp_tripped(client, unit_id):
+                    trip_seconds = time.monotonic() - started
+                    break
+            if trip_seconds is None:
+                raise RuntimeError(
+                    f"Over-temperature protection did not trip within "
+                    f"{_TRIP_TIMEOUT_SECONDS}s of lowering "
+                    f"0x{TEMP_LIMIT_REGISTER:04X}"
+                )
+            # Production is halted, PV released toward open-circuit.
+            mid = _pv_snapshot(client, unit_id)
+            time.sleep(off_seconds)
+        finally:
+            _restore_temp_limit(client, unit_id, original)
+
+        after = _pv_snapshot(client, unit_id)
+        _LOGGER.info(
+            "Temperature limit restored to %d (tripped after %.1fs, mid: %s, "
+            "after: %s); production typically re-engages with a fresh MPPT "
+            "sweep within a minute",
+            original,
+            trip_seconds if trip_seconds is not None else -1.0,
+            mid,
+            after,
+        )
+        return {
+            "original_limit": original,
+            "trip_seconds": trip_seconds,
+            "before": before,
+            "mid": mid,
+            "after": after,
+        }
     finally:
         client.close()

@@ -1,0 +1,17 @@
+force_mppt_reacquire:
+  fields:
+    device_id:
+      required: false
+      selector:
+        device:
+          integration: zepever
+    off_seconds:
+      required: false
+      default: 5
+      selector:
+        number:
+          min: 2
+          max: 15
+          step: 1
+          unit_of_measurement: s
+          mode: slider
