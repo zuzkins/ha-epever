@@ -3,9 +3,9 @@
   "name": "Epever",
   "codeowners": ["@zuzkins"],
   "config_flow": true,
-  "documentation": "https://github.com/zuzkins/zepever",
+  "documentation": "https://github.com/zuzkins/ha-epever",
   "iot_class": "local_polling",
   "quality_scale": "bronze",
   "requirements": ["pymodbus>=3.11.2,<3.14"],
-  "version": "0.2.2"
+  "version": "0.3.0"
 }
