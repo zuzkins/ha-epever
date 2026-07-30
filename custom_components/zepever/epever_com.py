@@ -13,6 +13,13 @@ _LOGGER = logging.getLogger(__name__)
 # before any read/write.
 _INIT_SEQUENCE = bytes.fromhex("20020000")
 
+# All holding-register writes go through write_registers (FC 0x10, write
+# multiple). EPEVER's own protocol spec lists only 0x01/0x02/0x03/0x04/0x05/
+# 0x10 as supported, and titles the settings block "Read Holding Register
+# (0x03) and Write Multiple Holding Register (0x10)" — FC 0x06 (write single)
+# is undocumented. The test device tolerates 0x06, but a Tracer-AN 30A rejects
+# it with IllegalDataAddress (issue #4), so use the documented function code.
+#
 # Controller inner temperature upper limit (x100 °C). Lowering it below the
 # actual controller temperature fakes an over-temperature condition: the
 # protection loop (evaluated roughly every 10 s) halts PV production and
@@ -315,8 +322,8 @@ def _restore_temp_limit(client: ModbusTcpClient, unit_id: int, value: int) -> No
         try:
             if not client.connect():
                 raise ConnectionError("reconnect failed")
-            result = client.write_register(
-                TEMP_LIMIT_REGISTER, value, device_id=unit_id
+            result = client.write_registers(
+                TEMP_LIMIT_REGISTER, [value], device_id=unit_id
             )
             if result.isError():
                 last_error = str(result)
@@ -408,8 +415,8 @@ def force_mppt_reacquire(
 
         before = _pv_snapshot(client, unit_id)
 
-        result = client.write_register(
-            TEMP_LIMIT_REGISTER, TEMP_LIMIT_DISABLE_VALUE, device_id=unit_id
+        result = client.write_registers(
+            TEMP_LIMIT_REGISTER, [TEMP_LIMIT_DISABLE_VALUE], device_id=unit_id
         )
         if result.isError():
             raise RuntimeError(

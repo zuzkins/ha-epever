@@ -459,6 +459,25 @@ Timing facts that shaped the implementation:
 - Production resumes ~30-60 s *after* restore; a 0 W reading right after
   the toggle is normal.
 
+### Write function code: FC 0x10, not 0x06 (issue #4, 2026-07-30)
+
+A Tracer-AN 30A rejected the disable write with
+`ExceptionResponse(dev_id=1, function_code=134, exception_code=2)` —
+`0x86` = write-single-register (FC `0x06`) refused with IllegalDataAddress.
+The read of `0x9019` on that unit succeeded and returned a sane limit, so
+the register exists and is readable; only FC `0x06` was refused.
+
+EPEVER's own protocol spec (B/A-Series v2.3) lists supported functions as
+`0x01, 0x02, 0x03, 0x04, 0x05, 0x10` — **FC `0x06` is not among them** — and
+titles the settings-parameter section *"Read Holding Register (0x03) and
+Write Multiple Holding Register (0x10)"*. The test device (Tracer 20A AN)
+tolerates the undocumented `0x06`; the 30A firmware does not.
+
+Both write sites now use `write_registers()` (FC `0x10`) with a
+single-element list. The existing ordering keeps this safe on firmware that
+supports neither: the disable write is attempted before anything is
+changed, so a rejection aborts with nothing written.
+
 ### Implemented in the integration (0x9019 method)
 
 The HA button/service (`Force MPPT reacquire` / `zepever.force_mppt_reacquire`)
