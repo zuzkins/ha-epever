@@ -7,11 +7,27 @@ from typing import Any
 from pymodbus import FramerType
 from pymodbus.client import ModbusTcpClient
 
+from .const import (
+    BATTERY_VOLTAGE_STATUS_LOW_VOLTAGE_DISCONNECT,
+    BATTERY_VOLTAGE_STATUSES,
+)
+
 _LOGGER = logging.getLogger(__name__)
 
 # Magic init sequence required by the Epever WiFi dongle after connect,
 # before any read/write.
 _INIT_SEQUENCE = bytes.fromhex("20020000")
+
+# Load output controls from the Epever B-series protocol.
+LOAD_CONTROL_MODE_REGISTER = 0x903D
+MANUAL_LOAD_COIL = 0x0002
+_LOAD_STATE_TIMEOUT_SECONDS = 3
+_LOAD_STATE_POLL_SECONDS = 0.25
+_LOW_VOLTAGE_DISCONNECT_ERROR = (
+    "Cannot turn on manual load: controller reports low-voltage disconnect "
+    "(battery status 3). The battery may be disconnected or below the "
+    "configured reconnect voltage"
+)
 
 # All holding-register writes go through write_registers (FC 0x10, write
 # multiple). EPEVER's own protocol spec lists only 0x01/0x02/0x03/0x04/0x05/
@@ -43,9 +59,7 @@ _TRIP_POLL_SECONDS = 2
 _RESTORE_ATTEMPTS = 5
 
 
-def get_pv_voltage(
-    host: str, port: int, unit_id: int = 1
-) -> float | None:
+def get_pv_voltage(host: str, port: int, unit_id: int = 1) -> float | None:
     """Retrieve the current PV voltage from the Epever device over Modbus TCP.
 
     Args:
@@ -92,9 +106,12 @@ def _value32(low: int, high: int) -> float:
     return (combined if combined < 2147483648 else combined - 4294967296) / 100.0
 
 
-def get_all_data(
-    host: str, port: int, unit_id: int = 1
-) -> dict[str, Any] | None:
+def decode_battery_voltage_status(register: int) -> str:
+    """Decode the voltage-status field from battery status register 0x3200."""
+    return BATTERY_VOLTAGE_STATUSES.get(register & 0x000F, "unknown")
+
+
+def get_all_data(host: str, port: int, unit_id: int = 1) -> dict[str, Any] | None:
     """Retrieve all data from the Epever device over Modbus TCP.
 
     Args:
@@ -152,9 +169,7 @@ def get_all_data(
         # because some firmware can't serve it together with the earlier
         # block (see comment above). Tolerate failure so other sensors
         # still come online on firmware variants that don't support it.
-        result = client.read_input_registers(
-            address=0x311A, count=2, device_id=unit_id
-        )
+        result = client.read_input_registers(address=0x311A, count=2, device_id=unit_id)
         if not result.isError() and len(result.registers) >= 2:
             soc = result.registers[0]  # 0x311A, percentage with no scaling
             if 0 <= soc <= 100:
@@ -170,62 +185,21 @@ def get_all_data(
 
         # Read status registers (0x3200 - 0x3202)
         result = client.read_input_registers(address=0x3200, count=3, device_id=unit_id)
-        if not result.isError():
-            status_registers = result.registers
+        if not result.isError() and len(result.registers) >= 3:
+            data["battery_voltage_status"] = decode_battery_voltage_status(
+                result.registers[0]
+            )
+            # Discharging equipment status D0: load output running.
+            discharging_status_value = result.registers[2]
+            data["load_output_on"] = bool(discharging_status_value & 0x0001)
 
-            # Battery status (0x3200)
-            battery_status_value = status_registers[0]
-            battery_status = {
-                "running": bool(battery_status_value & 0x0001),
-                "fault": bool((battery_status_value >> 1) & 0x0001),
-                "charging_equipment_overvoltage": bool(
-                    (battery_status_value >> 2) & 0x0001
-                ),
-                "charging_equipment_short_circuit": bool(
-                    (battery_status_value >> 3) & 0x0001
-                ),
-                "charging_equipment_overcurrent": bool(
-                    (battery_status_value >> 4) & 0x0001
-                ),
-                "charging_equipment_overheating": bool(
-                    (battery_status_value >> 5) & 0x0001
-                ),
-                "charging_equipment_short_circuit_2": bool(
-                    (battery_status_value >> 6) & 0x0001
-                ),
-                "battery_overvoltage": bool((battery_status_value >> 7) & 0x0001),
-                "battery_under voltage": bool((battery_status_value >> 8) & 0x0001),
-            }
-            # data["battery_status"] = battery_status
-
-            # Charging equipment status (0x3201)
-            charging_status_value = status_registers[1]
-            charging_status = {
-                "running": bool(charging_status_value & 0x0001),
-                "fault": bool((charging_status_value >> 1) & 0x0001),
-                "input_overvoltage": bool((charging_status_value >> 2) & 0x0001),
-                "input_undervoltage": bool((charging_status_value >> 3) & 0x0001),
-                "input_overcurrent": bool((charging_status_value >> 4) & 0x0001),
-                "output_overvoltage": bool((charging_status_value >> 5) & 0x0001),
-                "output_short_circuit": bool((charging_status_value >> 6) & 0x0001),
-                "mosfet_short_circuit": bool((charging_status_value >> 7) & 0x0001),
-                "overheating": bool((charging_status_value >> 8) & 0x0001),
-            }
-            # data["charging_equipment_status"] = charging_status
-
-            # Discharging equipment status (0x3202)
-            discharging_status_value = status_registers[2]
-            discharging_status = {
-                "running": bool(discharging_status_value & 0x0001),
-                "fault": bool((discharging_status_value >> 1) & 0x0001),
-                "input_voltage_abnormal": bool(
-                    (discharging_status_value >> 8) & 0x0001
-                ),
-                "output_overvoltage": bool((discharging_status_value >> 4) & 0x0001),
-                "output_short_circuit": bool((discharging_status_value >> 11) & 0x0001),
-                "overload": bool((discharging_status_value >> 12) & 0x0003),
-            }
-            # data["discharging_equipment_status"] = discharging_status
+        # Load control mode: 0 manual, 1 light on/off, 2 light + timer,
+        # 3 time control. Keep this separate from the input-register reads.
+        result = client.read_holding_registers(
+            address=LOAD_CONTROL_MODE_REGISTER, count=1, device_id=unit_id
+        )
+        if not result.isError() and len(result.registers) >= 1:
+            data["load_control_mode"] = result.registers[0]
 
         # All energy counters (0x3304 - 0x3313) in one read. 32-bit values
         # in consecutive lo/hi pairs, scaled by 100 (kWh). 0x3300-0x3303
@@ -244,16 +218,18 @@ def get_all_data(
 
             # Generated energy (PV)
             data["generated_energy_today"] = _value32(er[8], er[9])  # 0x330C-0x330D
-            data["generated_energy_this_month"] = _value32(er[10], er[11])  # 0x330E-0x330F
-            data["generated_energy_this_year"] = _value32(er[12], er[13])  # 0x3310-0x3311
+            data["generated_energy_this_month"] = _value32(
+                er[10], er[11]
+            )  # 0x330E-0x330F
+            data["generated_energy_this_year"] = _value32(
+                er[12], er[13]
+            )  # 0x3310-0x3311
             data["total_generated_energy"] = _value32(er[14], er[15])  # 0x3312-0x3313
 
         # Live battery temperature (RTS-aware, falls back to internal sensor
         # or a 25.00 °C sentinel when no source is wired) and ambient
         # temperature from the controller's statistical block.
-        result = client.read_input_registers(
-            address=0x331D, count=2, device_id=unit_id
-        )
+        result = client.read_input_registers(address=0x331D, count=2, device_id=unit_id)
         if not result.isError() and len(result.registers) >= 2:
             data["battery_temperature"] = _value16(result.registers[0])  # 0x331D
             data["ambient_temperature"] = _value16(result.registers[1])  # 0x331E
@@ -262,6 +238,117 @@ def get_all_data(
 
     except (ConnectionError, TimeoutError, ValueError, IndexError):
         return None
+    finally:
+        client.close()
+
+
+def set_load_control_mode(host: str, port: int, unit_id: int, mode: int) -> None:
+    """Set and verify the controller load-control mode."""
+    if mode not in range(4):
+        raise ValueError(f"Unsupported load control mode: {mode}")
+
+    client = ModbusTcpClient(host=host, port=port, retries=1, framer=FramerType.RTU)
+    try:
+        if not client.connect():
+            raise ConnectionError(f"Could not connect to {host}:{port}")
+        client.send(_INIT_SEQUENCE)
+
+        result = client.read_holding_registers(
+            address=LOAD_CONTROL_MODE_REGISTER, count=1, device_id=unit_id
+        )
+        if result.isError() or len(result.registers) < 1:
+            raise RuntimeError("Could not read the load control mode")
+        if result.registers[0] == mode:
+            return
+
+        result = client.write_registers(
+            LOAD_CONTROL_MODE_REGISTER, [mode], device_id=unit_id
+        )
+        if result.isError():
+            raise RuntimeError(f"Device rejected the load control mode write: {result}")
+
+        result = client.read_holding_registers(
+            address=LOAD_CONTROL_MODE_REGISTER, count=1, device_id=unit_id
+        )
+        if result.isError() or len(result.registers) < 1:
+            raise RuntimeError("Could not verify the load control mode write")
+        if result.registers[0] != mode:
+            raise RuntimeError(
+                f"Load control mode write did not stick: read "
+                f"{result.registers[0]} after writing {mode}"
+            )
+    finally:
+        client.close()
+
+
+def _read_load_status(client: ModbusTcpClient, unit_id: int) -> tuple[str, bool] | None:
+    """Read battery voltage status and whether the load output is running."""
+    result = client.read_input_registers(address=0x3200, count=3, device_id=unit_id)
+    if result.isError() or len(result.registers) < 3:
+        return None
+    return decode_battery_voltage_status(result.registers[0]), bool(
+        result.registers[2] & 0x0001
+    )
+
+
+def set_manual_load_output(host: str, port: int, unit_id: int, enabled: bool) -> None:
+    """Set and verify the manual load-output command."""
+    client = ModbusTcpClient(host=host, port=port, retries=1, framer=FramerType.RTU)
+    try:
+        if not client.connect():
+            raise ConnectionError(f"Could not connect to {host}:{port}")
+        client.send(_INIT_SEQUENCE)
+
+        result = client.read_holding_registers(
+            address=LOAD_CONTROL_MODE_REGISTER, count=1, device_id=unit_id
+        )
+        if result.isError() or len(result.registers) < 1:
+            raise RuntimeError("Could not read the load control mode")
+        if result.registers[0] != 0:
+            raise RuntimeError(
+                f"Manual load control requires mode 0; current mode is "
+                f"{result.registers[0]}"
+            )
+
+        load_status = _read_load_status(client, unit_id)
+        if load_status is None:
+            raise RuntimeError("Could not read the load output status")
+        battery_status, _ = load_status
+        if enabled and battery_status == BATTERY_VOLTAGE_STATUS_LOW_VOLTAGE_DISCONNECT:
+            raise RuntimeError(_LOW_VOLTAGE_DISCONNECT_ERROR)
+
+        result = client.write_coil(MANUAL_LOAD_COIL, enabled, device_id=unit_id)
+        if result.isError():
+            raise RuntimeError(f"Device rejected the manual load write: {result}")
+
+        result = client.read_coils(address=MANUAL_LOAD_COIL, count=1, device_id=unit_id)
+        if result.isError() or not result.bits:
+            raise RuntimeError("Could not verify the manual load write")
+        if bool(result.bits[0]) != enabled:
+            raise RuntimeError(
+                f"Manual load write did not stick: read {result.bits[0]} "
+                f"after writing {enabled}"
+            )
+
+        deadline = time.monotonic() + _LOAD_STATE_TIMEOUT_SECONDS
+        while True:
+            load_status = _read_load_status(client, unit_id)
+            if load_status is not None:
+                battery_status, output_on = load_status
+                if output_on == enabled:
+                    break
+                if (
+                    enabled
+                    and battery_status == BATTERY_VOLTAGE_STATUS_LOW_VOLTAGE_DISCONNECT
+                ):
+                    raise RuntimeError(_LOW_VOLTAGE_DISCONNECT_ERROR)
+            if time.monotonic() >= deadline:
+                target = "on" if enabled else "off"
+                raise RuntimeError(
+                    f"Manual load command was accepted, but the physical output "
+                    f"did not turn {target} within {_LOAD_STATE_TIMEOUT_SECONDS}s"
+                )
+            time.sleep(_LOAD_STATE_POLL_SECONDS)
     finally:
         client.close()
 

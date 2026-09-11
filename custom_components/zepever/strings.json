@@ -15,6 +15,26 @@
       }
     }
   },
+  "entity": {
+    "binary_sensor": {
+      "load_output": {
+        "name": "Load Output"
+      }
+    },
+    "sensor": {
+      "battery_voltage_status": {
+        "name": "Battery voltage status",
+        "state": {
+          "normal": "Normal",
+          "over_voltage": "Over voltage",
+          "under_voltage": "Under voltage",
+          "low_voltage_disconnect": "Low voltage disconnect",
+          "fault": "Fault",
+          "unknown": "Unknown"
+        }
+      }
+    }
+  },
   "config": {
     "abort": {
       "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"

@@ -22,7 +22,12 @@ from .const import (
     DOMAIN,
     REACQUIRE_COOLDOWN_SECONDS,
 )
-from .epever_com import force_mppt_reacquire, get_all_data
+from .epever_com import (
+    force_mppt_reacquire,
+    get_all_data,
+    set_load_control_mode,
+    set_manual_load_output,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -110,3 +115,32 @@ class EpeverDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         await self.async_request_refresh()
 
+    async def async_set_load_control_mode(self, mode: int) -> None:
+        """Set the controller load-control mode."""
+        try:
+            async with self.modbus_lock:
+                await self.hass.async_add_executor_job(
+                    set_load_control_mode,
+                    self.host,
+                    self.port,
+                    self.unit_id,
+                    mode,
+                )
+        except Exception as err:
+            raise HomeAssistantError(f"Could not set load control mode: {err}") from err
+        await self.async_request_refresh()
+
+    async def async_set_manual_load_output(self, enabled: bool) -> None:
+        """Set the manual load output."""
+        try:
+            async with self.modbus_lock:
+                await self.hass.async_add_executor_job(
+                    set_manual_load_output,
+                    self.host,
+                    self.port,
+                    self.unit_id,
+                    enabled,
+                )
+        except Exception as err:
+            raise HomeAssistantError(f"Could not set manual load: {err}") from err
+        await self.async_request_refresh()

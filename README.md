@@ -126,8 +126,9 @@ The integration polls the controller locally every five seconds and creates
 entities for:
 
 - PV voltage, current, and power
-- Battery voltage, current, power, and state of charge
-- Load voltage, current, and power
+- Battery voltage, current, power, state of charge, and voltage status
+- Load voltage, current, power, and physical output status
+- Load control mode and manual load-output control
 - Controller, battery, remote battery, and ambient temperatures
 - Generated energy for today, this month, this year, and total
 - Consumed load energy for today, this month, this year, and total
@@ -138,6 +139,20 @@ the energy measured on the controller's load output; it does not include loads
 connected directly to the battery.
 
 <img src="docs/home_assistant_sensor_data.png" alt="Epever sensor entities in Home Assistant" width="520">
+
+### Load output control
+
+The **Load control mode** configuration select exposes the controller's four
+documented modes: Manual control, Light on/off, Light on + timer, and Time
+control. Light and timer modes use thresholds and schedules already stored in
+the controller; this integration does not configure those settings.
+
+The **Manual load** switch is available only in Manual control mode. Its state
+comes from the controller's physical load-output status, so a protection such
+as low-voltage disconnect can reject an on command. A low-voltage disconnect
+error can also mean that no battery is connected. Changing the control mode can
+immediately change the load output; verify the controller's existing settings
+before selecting a different mode.
 
 ### Temperature readings
 

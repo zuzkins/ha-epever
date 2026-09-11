@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_DEVICE_ID, Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
-from homeassistant.helpers import config_validation as cv, device_registry as dr
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
@@ -21,7 +21,13 @@ from .const import (
 )
 from .coordinator import EpeverDataUpdateCoordinator
 
-PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.SENSOR]
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -65,9 +71,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     async def _handle_force_mppt_reacquire(call: ServiceCall) -> None:
         entry = _async_resolve_entry(hass, call)
-        await entry.runtime_data.async_force_mppt_reacquire(
-            call.data[ATTR_OFF_SECONDS]
-        )
+        await entry.runtime_data.async_force_mppt_reacquire(call.data[ATTR_OFF_SECONDS])
 
     hass.services.async_register(
         DOMAIN,

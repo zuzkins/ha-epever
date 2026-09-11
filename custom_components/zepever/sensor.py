@@ -22,7 +22,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_DEVICE_NAME, DOMAIN
+from .const import BATTERY_VOLTAGE_STATUS_OPTIONS, CONF_DEVICE_NAME, DOMAIN
 from .coordinator import EpeverDataUpdateCoordinator
 
 SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
@@ -129,6 +129,12 @@ SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=0,
+    ),
+    SensorEntityDescription(
+        key="battery_voltage_status",
+        translation_key="battery_voltage_status",
+        device_class=SensorDeviceClass.ENUM,
+        options=list(BATTERY_VOLTAGE_STATUS_OPTIONS),
     ),
     SensorEntityDescription(
         key="generated_energy_today",
@@ -249,9 +255,8 @@ class EpeverSensor(CoordinatorEntity[EpeverDataUpdateCoordinator], SensorEntity)
         )
 
     @property
-    def native_value(self) -> float | None:
+    def native_value(self) -> float | str | None:
         """Return the state of the sensor."""
         if self.coordinator.data is None:
             return None
         return self.coordinator.data.get(self.entity_description.key)
-
