@@ -32,6 +32,16 @@
           "fault": "Fault",
           "unknown": "Unknown"
         }
+      },
+      "charging_status": {
+        "name": "Charging status",
+        "state": {
+          "no_charging": "Not charging",
+          "float": "Float",
+          "boost": "Boost",
+          "equalize": "Equalize",
+          "unknown": "Unknown"
+        }
       }
     }
   },

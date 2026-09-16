@@ -22,7 +22,12 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import BATTERY_VOLTAGE_STATUS_OPTIONS, CONF_DEVICE_NAME, DOMAIN
+from .const import (
+    BATTERY_VOLTAGE_STATUS_OPTIONS,
+    CHARGING_STATUS_OPTIONS,
+    CONF_DEVICE_NAME,
+    DOMAIN,
+)
 from .coordinator import EpeverDataUpdateCoordinator
 
 SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
@@ -135,6 +140,12 @@ SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         translation_key="battery_voltage_status",
         device_class=SensorDeviceClass.ENUM,
         options=list(BATTERY_VOLTAGE_STATUS_OPTIONS),
+    ),
+    SensorEntityDescription(
+        key="charging_status",
+        translation_key="charging_status",
+        device_class=SensorDeviceClass.ENUM,
+        options=list(CHARGING_STATUS_OPTIONS),
     ),
     SensorEntityDescription(
         key="generated_energy_today",

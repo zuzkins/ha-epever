@@ -21,6 +21,15 @@ BATTERY_VOLTAGE_STATUSES = {
 }
 BATTERY_VOLTAGE_STATUS_OPTIONS = (*BATTERY_VOLTAGE_STATUSES.values(), "unknown")
 
+# Charging equipment status register 0x3201, bits D3-D2.
+CHARGING_STATUSES = {
+    0: "no_charging",
+    1: "float",
+    2: "boost",
+    3: "equalize",
+}
+CHARGING_STATUS_OPTIONS = (*CHARGING_STATUSES.values(), "unknown")
+
 LOAD_CONTROL_MODE_MANUAL = 0
 LOAD_CONTROL_MODES = {
     0: "Manual control",

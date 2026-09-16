@@ -10,6 +10,7 @@ from pymodbus.client import ModbusTcpClient
 from .const import (
     BATTERY_VOLTAGE_STATUS_LOW_VOLTAGE_DISCONNECT,
     BATTERY_VOLTAGE_STATUSES,
+    CHARGING_STATUSES,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -111,6 +112,15 @@ def decode_battery_voltage_status(register: int) -> str:
     return BATTERY_VOLTAGE_STATUSES.get(register & 0x000F, "unknown")
 
 
+def decode_charging_status(register: int) -> str:
+    """Decode the charging-status field from charging status register 0x3201.
+
+    Bits D3-D2 carry the charge stage; the surrounding bits are fault and
+    input-voltage flags we do not expose yet.
+    """
+    return CHARGING_STATUSES.get((register >> 2) & 0x0003, "unknown")
+
+
 def get_all_data(host: str, port: int, unit_id: int = 1) -> dict[str, Any] | None:
     """Retrieve all data from the Epever device over Modbus TCP.
 
@@ -189,6 +199,8 @@ def get_all_data(host: str, port: int, unit_id: int = 1) -> dict[str, Any] | Non
             data["battery_voltage_status"] = decode_battery_voltage_status(
                 result.registers[0]
             )
+            # Charging equipment status D3-D2: charge stage.
+            data["charging_status"] = decode_charging_status(result.registers[1])
             # Discharging equipment status D0: load output running.
             discharging_status_value = result.registers[2]
             data["load_output_on"] = bool(discharging_status_value & 0x0001)
