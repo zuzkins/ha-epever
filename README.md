@@ -1,6 +1,6 @@
 # Epever Integration for Home Assistant
 
-[![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://www.hacs.xyz/)
+[![Marketplace Custom](https://img.shields.io/badge/Marketplace-Custom-orange.svg)](https://www.home-assistant.io/integrations/marketplace)
 
 Monitor an Epever solar charge controller locally in Home Assistant through an
 Epever WiFi adapter. The integration reads live solar production, battery and
@@ -80,18 +80,29 @@ Do not change the serial port parameters.
 
 ## Install the Integration
 
-### HACS
+This repository is not in the default catalog, so add it as a custom
+repository. Which steps apply depends on your Home Assistant version.
 
-This repository is not in the default HACS repository list, so add it as a
-custom repository:
+### Marketplace (Home Assistant 2026.11 and later)
+
+Home Assistant 2026.11 replaced HACS with the built-in Marketplace. Do not
+install HACS on these versions. Integrations already installed through HACS
+are migrated automatically.
+
+1. Go to **Settings > Marketplace** as an administrator and accept the warning if prompted.
+2. Select **Add from link**.
+3. Enter `https://github.com/zuzkins/ha-epever` and select **Add**. Connect your GitHub account if prompted.
+4. Open the new **Epever** entry and select **Install**, then confirm.
+5. Restart Home Assistant if a repair asks you to.
+
+### HACS (Home Assistant 2026.10 and earlier)
 
 1. Open **HACS** in Home Assistant.
-2. Select **Integrations**.
-3. Open the three-dot menu and select **Custom repositories**.
-4. Enter `https://github.com/zuzkins/ha-epever` as the repository.
-5. Select **Integration** as the category and click **Add**.
-6. Open the new **Epever** entry and click **Download**.
-7. Restart Home Assistant.
+2. Open the three-dot menu and select **Custom repositories**.
+3. Enter `https://github.com/zuzkins/ha-epever` as the repository.
+4. Select **Integration** as the category and click **Add**.
+5. Open the new **Epever** entry and click **Download**.
+6. Restart Home Assistant.
 
 <details>
 <summary>Manual installation</summary>
