@@ -13,10 +13,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_DEVICE_ADDRESS,
     CONF_DEVICE_PORT,
+    CONF_DEVICE_TYPE,
     CONF_UNIT_ID,
     CONNECTION_QUALITY_DEGRADED,
     CONNECTION_QUALITY_DEGRADED_RATE,
@@ -25,7 +27,13 @@ from .const import (
     CONNECTION_QUALITY_WINDOW,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_UNIT_ID,
+    DEVICE_MODELS,
+    DEVICE_TYPE_HP,
+    DEVICE_TYPE_TRACER,
     DOMAIN,
+    HP_LOG_INTERVAL,
+    HP_LOG_SIZE,
+    HP_SCAN_INTERVAL,
     MAX_CONSECUTIVE_FAILURES,
     REACQUIRE_COOLDOWN_SECONDS,
 )
@@ -35,6 +43,7 @@ from .epever_com import (
     set_load_control_mode,
     set_manual_load_output,
 )
+from .hp_com import get_hp_data
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,15 +57,21 @@ class EpeverDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         entry: ConfigEntry,
     ) -> None:
         """Initialize coordinator."""
+        self.device_type = entry.data.get(CONF_DEVICE_TYPE, DEVICE_TYPE_TRACER)
+        is_hp = self.device_type == DEVICE_TYPE_HP
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
+            update_interval=timedelta(
+                seconds=HP_SCAN_INTERVAL if is_hp else DEFAULT_SCAN_INTERVAL
+            ),
             config_entry=entry,
         )
         self.host = entry.data[CONF_DEVICE_ADDRESS]
         self.port = entry.data[CONF_DEVICE_PORT]
+        self.device_model = DEVICE_MODELS[self.device_type]
+        self._get_data = get_hp_data if is_hp else get_all_data
         self.unit_id = entry.data.get(CONF_UNIT_ID, DEFAULT_UNIT_ID)
         # The WiFi dongle handles one TCP client at a time; every Modbus
         # operation (poll or reacquire toggle) must hold this lock.
@@ -67,13 +82,16 @@ class EpeverDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # of the last failure, for the connection quality sensor.
         self.recent_polls: deque[bool] = deque(maxlen=CONNECTION_QUALITY_WINDOW)
         self.last_failed_segment: str | None = None
+        # (UTC time, {address: value}) of the HP register block, HP only.
+        self.register_log: deque[tuple[str, dict[int, int]]] = deque(maxlen=HP_LOG_SIZE)
+        self._last_register_log: float | None = None
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from Epever device."""
         try:
             async with self.modbus_lock:
                 data = await self.hass.async_add_executor_job(
-                    get_all_data, self.host, self.port, self.unit_id
+                    self._get_data, self.host, self.port, self.unit_id
                 )
             if data is None:
                 raise UpdateFailed("Failed to retrieve data from device")
@@ -103,7 +121,28 @@ class EpeverDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Error communicating with device: {err}") from err
         self.consecutive_failures = 0
         self.recent_polls.append(True)
+        if self.device_type == DEVICE_TYPE_HP:
+            self._log_registers(data)
         return data
+
+    def _log_registers(self, data: dict[str, Any]) -> None:
+        """Keep a register snapshot every HP_LOG_INTERVAL seconds."""
+        now = time.monotonic()
+        if (
+            self._last_register_log is None
+            or now - self._last_register_log >= HP_LOG_INTERVAL
+        ):
+            self._last_register_log = now
+            self.register_log.append(
+                (dt_util.utcnow().isoformat(timespec="seconds"), data["registers"])
+            )
+
+    def _require_tracer(self) -> None:
+        """Refuse writes to other devices: the Tracer registers mean other things."""
+        if self.device_type != DEVICE_TYPE_TRACER:
+            raise ServiceValidationError(
+                f"Not supported on this device: {self.device_model}"
+            )
 
     @property
     def recent_failure_rate(self) -> float:
@@ -132,6 +171,7 @@ class EpeverDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             HomeAssistantError: if the toggle fails; the message says whether
                 charging was left disabled.
         """
+        self._require_tracer()
         now = time.monotonic()
         if (
             self._last_reacquire is not None
@@ -172,6 +212,7 @@ class EpeverDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_set_load_control_mode(self, mode: int) -> None:
         """Set the controller load-control mode."""
+        self._require_tracer()
         try:
             async with self.modbus_lock:
                 await self.hass.async_add_executor_job(
@@ -187,6 +228,7 @@ class EpeverDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_set_manual_load_output(self, enabled: bool) -> None:
         """Set the manual load output."""
+        self._require_tracer()
         try:
             async with self.modbus_lock:
                 await self.hass.async_add_executor_job(

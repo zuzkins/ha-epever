@@ -6,10 +6,24 @@ CONF_DEVICE_NAME = "device_name"
 CONF_DEVICE_ADDRESS = "device_address"
 CONF_DEVICE_PORT = "device_port"
 CONF_UNIT_ID = "unit_id"
+CONF_DEVICE_TYPE = "device_type"
+
+# Entries created before the device type existed are all Tracers.
+DEVICE_TYPE_TRACER = "tracer"
+DEVICE_TYPE_HP = "hp_inverter"
+DEVICE_TYPES = {
+    DEVICE_TYPE_TRACER: "Solar charge controller (Tracer)",
+    DEVICE_TYPE_HP: "HP series hybrid inverter (experimental, read-only)",
+}
+DEVICE_MODELS = {
+    DEVICE_TYPE_TRACER: "Solar Charge Controller",
+    DEVICE_TYPE_HP: "HP Hybrid Inverter (experimental)",
+}
 
 DEFAULT_PORT = 9999
 DEFAULT_UNIT_ID = 1
 DEFAULT_SCAN_INTERVAL = 5  # seconds
+HP_SCAN_INTERVAL = 30  # seconds
 # Consecutive failed polls before entities go unavailable; earlier failures
 # keep serving the last good data so a dropped frame doesn't flap them.
 MAX_CONSECUTIVE_FAILURES = 3
@@ -54,6 +68,10 @@ LOAD_CONTROL_MODES = {
     2: "Light on + timer",
     3: "Time control",
 }
+
+# Raw register log of the HP inverter, for the diagnostics download.
+HP_LOG_INTERVAL = 300  # seconds
+HP_LOG_SIZE = 288  # snapshots, 24 h
 
 # MPPT reacquire experiment (docs/epever_mppt_reacquire_experiment.md)
 SERVICE_FORCE_MPPT_REACQUIRE = "force_mppt_reacquire"

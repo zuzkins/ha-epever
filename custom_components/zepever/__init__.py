@@ -13,7 +13,9 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     ATTR_OFF_SECONDS,
+    CONF_DEVICE_TYPE,
     DEFAULT_OFF_SECONDS,
+    DEVICE_TYPE_TRACER,
     DOMAIN,
     MAX_OFF_SECONDS,
     MIN_OFF_SECONDS,
@@ -29,6 +31,9 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
 ]
 
+# Everything but the sensors writes to, or reads registers of, the Tracer.
+READ_ONLY_PLATFORMS: list[Platform] = [Platform.SENSOR]
+
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 type EpeverConfigEntry = ConfigEntry[EpeverDataUpdateCoordinator]
@@ -43,6 +48,16 @@ SERVICE_FORCE_MPPT_REACQUIRE_SCHEMA = vol.Schema(
 )
 
 
+def _is_tracer(entry: EpeverConfigEntry) -> bool:
+    """Return whether the entry is a Tracer charge controller."""
+    return entry.data.get(CONF_DEVICE_TYPE, DEVICE_TYPE_TRACER) == DEVICE_TYPE_TRACER
+
+
+def _platforms(entry: EpeverConfigEntry) -> list[Platform]:
+    """Return the platforms the device type supports."""
+    return PLATFORMS if _is_tracer(entry) else READ_ONLY_PLATFORMS
+
+
 def _async_resolve_entry(hass: HomeAssistant, call: ServiceCall) -> EpeverConfigEntry:
     """Resolve the service call to a loaded config entry."""
     entries: list[EpeverConfigEntry] = hass.config_entries.async_loaded_entries(DOMAIN)
@@ -51,6 +66,8 @@ def _async_resolve_entry(hass: HomeAssistant, call: ServiceCall) -> EpeverConfig
 
     device_id: str | None = call.data.get(ATTR_DEVICE_ID)
     if device_id is None:
+        # Another device type must not make the only Tracer ambiguous.
+        entries = [entry for entry in entries if _is_tracer(entry)] or entries
         if len(entries) > 1:
             raise ServiceValidationError(
                 "Multiple Epever devices are set up; specify device_id"
@@ -90,11 +107,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: EpeverConfigEntry) -> bo
 
     entry.runtime_data = coordinator
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    await hass.config_entries.async_forward_entry_setups(entry, _platforms(entry))
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: EpeverConfigEntry) -> bool:
     """Unload a config entry."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    return await hass.config_entries.async_unload_platforms(entry, _platforms(entry))

@@ -30,9 +30,11 @@ from .const import (
     CHARGING_STATUS_OPTIONS,
     CONF_DEVICE_NAME,
     CONNECTION_QUALITY_OPTIONS,
+    DEVICE_TYPE_HP,
     DOMAIN,
 )
 from .coordinator import EpeverDataUpdateCoordinator
+from .hp_sensor import HP_SENSOR_DESCRIPTIONS, HpSensorEntityDescription
 
 SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
@@ -263,12 +265,20 @@ async def async_setup_entry(
     """Set up Epever sensors from a config entry."""
     coordinator: EpeverDataUpdateCoordinator = entry.runtime_data
 
+    sensors: list[EpeverSensor]
+    if coordinator.device_type == DEVICE_TYPE_HP:
+        sensors = [
+            EpeverHpSensor(coordinator, description)
+            for description in HP_SENSOR_DESCRIPTIONS
+        ]
+    else:
+        sensors = [
+            EpeverSensor(coordinator, description)
+            for description in SENSOR_DESCRIPTIONS
+        ]
     async_add_entities(
         [
-            *(
-                EpeverSensor(coordinator, description)
-                for description in SENSOR_DESCRIPTIONS
-            ),
+            *sensors,
             EpeverConnectionQualitySensor(coordinator, CONNECTION_QUALITY_DESCRIPTION),
             EpeverPollFailureRateSensor(coordinator, POLL_FAILURE_RATE_DESCRIPTION),
         ]
@@ -294,7 +304,7 @@ class EpeverSensor(CoordinatorEntity[EpeverDataUpdateCoordinator], SensorEntity)
             identifiers={(DOMAIN, coordinator.config_entry.entry_id)},
             name=device_name,
             manufacturer="Epever",
-            model="Solar Charge Controller",
+            model=coordinator.device_model,
         )
 
     @property
@@ -303,6 +313,23 @@ class EpeverSensor(CoordinatorEntity[EpeverDataUpdateCoordinator], SensorEntity)
         if self.coordinator.data is None:
             return None
         return self.coordinator.data.get(self.entity_description.key)
+
+
+class EpeverHpSensor(EpeverSensor):
+    """Sensor decoded from a register of the HP inverter."""
+
+    entity_description: HpSensorEntityDescription
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the scaled signed register value."""
+        if self.coordinator.data is None:
+            return None
+        description = self.entity_description
+        value = self.coordinator.data["registers"][description.address]
+        if value > 0x7FFF:
+            value -= 0x10000
+        return value / description.divisor if description.divisor > 1 else value
 
 
 class EpeverConnectionQualitySensor(EpeverSensor):

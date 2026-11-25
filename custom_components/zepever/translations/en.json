@@ -68,6 +68,7 @@
         "step": {
             "user": {
                 "data": {
+                    "device_type": "Device type",
                     "host": "Host",
                     "password": "Password",
                     "username": "Username"

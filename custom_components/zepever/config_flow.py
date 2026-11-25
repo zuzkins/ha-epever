@@ -10,20 +10,38 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.selector import (
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+)
 
 from .const import (
     CONF_DEVICE_ADDRESS,
     CONF_DEVICE_NAME,
     CONF_DEVICE_PORT,
+    CONF_DEVICE_TYPE,
     DEFAULT_PORT,
+    DEVICE_TYPE_HP,
+    DEVICE_TYPES,
     DOMAIN,
 )
 from .epever_com import get_all_data
+from .hp_com import get_hp_data
 
 _LOGGER = logging.getLogger(__name__)
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
+        # No default: reading the wrong register map looks like a dead device.
+        vol.Required(CONF_DEVICE_TYPE): SelectSelector(
+            SelectSelectorConfig(
+                options=[
+                    SelectOptionDict(value=value, label=label)
+                    for value, label in DEVICE_TYPES.items()
+                ]
+            )
+        ),
         vol.Required(CONF_DEVICE_NAME): str,
         vol.Required(CONF_DEVICE_ADDRESS): str,
         vol.Required(CONF_DEVICE_PORT, default=DEFAULT_PORT): int,
@@ -36,10 +54,13 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
 
     Data has the keys from STEP_USER_DATA_SCHEMA with values provided by the user.
     """
+    get_data = (
+        get_hp_data if data[CONF_DEVICE_TYPE] == DEVICE_TYPE_HP else get_all_data
+    )
     # Test connection by trying to fetch data
     try:
         result = await hass.async_add_executor_job(
-            get_all_data,
+            get_data,
             data[CONF_DEVICE_ADDRESS],
             data[CONF_DEVICE_PORT],
         )
