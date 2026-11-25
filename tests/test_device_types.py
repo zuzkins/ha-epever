@@ -1,5 +1,7 @@
 """Device type selection, and that HP inverters are never written to."""
 
+import time
+
 import pytest
 from homeassistant.data_entry_flow import InvalidData
 from homeassistant.exceptions import ServiceValidationError
@@ -44,27 +46,150 @@ def state(hass, entry, key):
     return hass.states.get(entity_id)
 
 
-async def test_hp_sensors(hass, hp_dongle):
-    """The dump decodes to the expected values, without statistics."""
+async def test_hp_night_dump(hass, hp_dongle):
+    """The dump decodes to the expected values, without Energy statistics."""
     entry = await setup(hass, hp_dongle, "hp_inverter")
-    assert {e.domain for e in entities(hass, entry)} == {"sensor"}
+    assert {e.domain for e in entities(hass, entry)} == {"sensor", "binary_sensor"}
     expected = {
-        0x300F: 233.8,
-        0x3011: 49.9,
-        0x301A: 818,
-        0x301B: 757,
-        0x3021: 50.4,
-        0x3022: -0.4,
-        0x3023: 96,
-        0x3024: -20,
+        "grid_voltage": 233.8,
+        "grid_frequency": 49.9,
+        "load_voltage": 233.5,
+        "battery_voltage": 50.4,
+        "battery_current": -0.4,
+        "battery_state_of_charge": 96,
+        "pv1_voltage": 0,
+        "pv_temperature": 23.4,
+        "hp_debug_301a": 818,
+        "hp_debug_301b": 757,
+        "hp_debug_3024": -20,
     }
-    for address, value in expected.items():
-        sensor = state(hass, entry, f"hp_debug_{address:04x}")
-        assert float(sensor.state) == value
-        assert "state_class" not in sensor.attributes
-        assert "device_class" not in sensor.attributes
+    for key, value in expected.items():
+        assert float(state(hass, entry, key).state) == value
+    assert state(hass, entry, "charging_status").state == "no_charging"
+    assert state(hass, entry, "operating_mode").state == "bypass"
+    assert state(hass, entry, "battery_flow").state == "discharging"
+    assert state(hass, entry, "grid_status").state == "normal"
+    fault = hass.states.get("binary_sensor.dev_fault")
+    assert fault.state == "off"
+    assert fault.attributes["faults"] == fault.attributes["notices"] == []
+    for entity in entities(hass, entry):
+        attributes = hass.states.get(entity.entity_id).attributes
+        assert attributes.get("device_class") != "energy"
+        if "hp_debug" in entity.unique_id:
+            assert "state_class" not in attributes
+            assert "device_class" not in attributes
     assert all(f == 4 and c <= 16 for f, _, c in hp_dongle.requests)
+    # An unanswered energy block must not slow down the setup.
+    assert all(a >= 0x3000 for _, a, _ in hp_dongle.requests)
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_hp_day_and_faults(hass, hp_dongle):
+    """PV, equalize/boost and fault bits decode."""
+    hp_dongle.registers |= {
+        0x3025: 3,
+        0x3026: 3105,
+        0x3029: 42,
+        0x302C: 1304,
+        0x3022: 250,
+        0x3038: (1 << 13) | (1 << 11) | (2 << 3),
+        0x3006: 1 << 10,
+        0x3008: 1 << 9,
+    }
+    entry = await setup(hass, hp_dongle, "hp_inverter")
+    assert float(state(hass, entry, "pv1_voltage").state) == 310.5
+    assert float(state(hass, entry, "pv1_current").state) == 4.2
+    assert float(state(hass, entry, "pv1_power").state) == 1304
+    assert float(state(hass, entry, "battery_current").state) == 25
+    assert state(hass, entry, "charging_status").state == "boost"
+    assert state(hass, entry, "operating_mode").state == "normal"
+    assert state(hass, entry, "battery_flow").state == "charging"
+    assert state(hass, entry, "grid_status").state == "abnormal"
+    fault = hass.states.get("binary_sensor.dev_fault")
+    assert fault.state == "on"
+    assert fault.attributes["faults"] == ["Inverter over temperature"]
+    assert fault.attributes["notices"] == ["Remote temperature sensor not connected"]
+    hp_dongle.registers[0x3006] = 0
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+    assert hass.states.get("binary_sensor.dev_fault").state == "off"
+
+
+def energy_requests(dongle):
+    """Return the addresses of the energy reads so far."""
+    return [address for _, address, _ in dongle.requests if address < 0x3000]
+
+
+async def test_hp_energy(hass, hp_dongle):
+    """One energy block is read per poll, then all wait for their interval."""
+    hp_dongle.registers |= {a: 0 for a in range(0x1000, 0x1058)}
+    hp_dongle.registers |= {0x1000: 7, 0x104C: 1, 0x104D: 2}
+    entry = await setup(hass, hp_dongle, "hp_inverter")
+    assert state(hass, entry, "hp_debug_1000").state == "unknown"
+    coordinator = entry.runtime_data
+    for _ in range(7):
+        await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert energy_requests(hp_dongle) == [0x1000, 0x1018, 0x102A, 0x1046, 0x1056]
+    assert float(state(hass, entry, "hp_debug_1000").state) == 7
+    assert float(state(hass, entry, "hp_debug_104c").state) == 0x20001
+    assert coordinator.energy_errors == {}
+    result = await async_get_config_entry_diagnostics(hass, entry)
+    assert "0x1000" in result["registers"]
+
+
+async def test_hp_silent_energy_block(hass, hp_dongle):
+    """A silent energy block hides neither later blocks nor live data."""
+    hp_dongle.registers |= {a: 3 for a in range(0x102A, 0x1032)}
+    entry = await setup(hass, hp_dongle, "hp_inverter")
+    coordinator = entry.runtime_data
+    for _ in range(5):
+        await coordinator.async_refresh()
+        assert coordinator.last_update_success
+        assert coordinator.consecutive_failures == 0
+    await hass.async_block_till_done()
+    assert float(state(hass, entry, "hp_debug_102a").state) == 0x30003
+    assert state(hass, entry, "hp_debug_1000").state == "unknown"
+    assert float(state(hass, entry, "battery_voltage").state) == 50.4
+    assert set(coordinator.energy_errors) == {0x1000, 0x1018, 0x1046, 0x1056}
+
+    # Silent blocks back off for longer than the answering one.
+    now = time.monotonic()
+    due = {block[0]: at - now for block, at in coordinator._energy_due.items()}
+    assert due[0x102A] < 301
+    assert all(due[a] > 3000 for a in coordinator.energy_errors)
+    count = len(energy_requests(hp_dongle))
+    await coordinator.async_refresh()
+    assert len(energy_requests(hp_dongle)) == count
+
+    # A block that answered keeps its values and its interval over a failure.
+    for address in range(0x102A, 0x1032):
+        del hp_dongle.registers[address]
+    coordinator._energy_due[(0x102A, 8)] = 0.0
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert 0x102A in coordinator.energy_errors
+    assert float(state(hass, entry, "hp_debug_102a").state) == 0x30003
+    assert coordinator._energy_due[(0x102A, 8)] - time.monotonic() < 301
+
+
+async def test_hp_removes_old_debug_entities(hass, hp_dongle):
+    """Debug sensors of 0.7.0 that got confirmed don't linger."""
+    entry = MockConfigEntry(domain=DOMAIN, data=data_for(hp_dongle, "hp_inverter"))
+    entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    for address in ("300f", "3012"):
+        registry.async_get_or_create(
+            "sensor",
+            DOMAIN,
+            f"{entry.entry_id}_hp_debug_{address}",
+            config_entry=entry,
+        )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    ids = {e.unique_id for e in entities(hass, entry)}
+    assert f"{entry.entry_id}_hp_debug_300f" not in ids
+    assert f"{entry.entry_id}_hp_debug_3012" in ids
 
 
 async def test_hp_rejects_writes(hass, hp_dongle):
@@ -88,6 +213,7 @@ async def test_hp_diagnostics(hass, hp_dongle):
     """Diagnostics carry the log, spaced by interval, without the address."""
     entry = await setup(hass, hp_dongle, "hp_inverter")
     coordinator = entry.runtime_data
+    coordinator._energy_due = dict.fromkeys(coordinator._energy_due, float("inf"))
     await coordinator.async_refresh()
     assert len(coordinator.register_log) == 1
     coordinator._last_register_log -= 300

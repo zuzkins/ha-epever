@@ -43,6 +43,31 @@
                     "unknown": "Unknown"
                 }
             },
+            "operating_mode": {
+                "name": "Operating mode",
+                "state": {
+                    "normal": "Normal",
+                    "bypass": "Bypass",
+                    "unknown": "Unknown"
+                }
+            },
+            "battery_flow": {
+                "name": "Battery flow",
+                "state": {
+                    "idle": "Idle",
+                    "charging": "Charging",
+                    "discharging": "Discharging",
+                    "unknown": "Unknown"
+                }
+            },
+            "grid_status": {
+                "name": "Grid status",
+                "state": {
+                    "normal": "Normal",
+                    "abnormal": "Abnormal",
+                    "unknown": "Unknown"
+                }
+            },
             "connection_quality": {
                 "name": "Connection quality",
                 "state": {

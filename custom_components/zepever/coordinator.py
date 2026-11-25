@@ -31,6 +31,8 @@ from .const import (
     DEVICE_TYPE_HP,
     DEVICE_TYPE_TRACER,
     DOMAIN,
+    HP_ENERGY_INTERVAL,
+    HP_ENERGY_RETRY_INTERVAL,
     HP_LOG_INTERVAL,
     HP_LOG_SIZE,
     HP_SCAN_INTERVAL,
@@ -43,7 +45,7 @@ from .epever_com import (
     set_load_control_mode,
     set_manual_load_output,
 )
-from .hp_com import get_hp_data
+from .hp_com import HP_ENERGY_BLOCKS, get_hp_data
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -71,7 +73,6 @@ class EpeverDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.host = entry.data[CONF_DEVICE_ADDRESS]
         self.port = entry.data[CONF_DEVICE_PORT]
         self.device_model = DEVICE_MODELS[self.device_type]
-        self._get_data = get_hp_data if is_hp else get_all_data
         self.unit_id = entry.data.get(CONF_UNIT_ID, DEFAULT_UNIT_ID)
         # The WiFi dongle handles one TCP client at a time; every Modbus
         # operation (poll or reacquire toggle) must hold this lock.
@@ -82,17 +83,24 @@ class EpeverDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # of the last failure, for the connection quality sensor.
         self.recent_polls: deque[bool] = deque(maxlen=CONNECTION_QUALITY_WINDOW)
         self.last_failed_segment: str | None = None
-        # (UTC time, {address: value}) of the HP register block, HP only.
+        # (UTC time, {address: value}) of the HP register blocks, HP only.
         self.register_log: deque[tuple[str, dict[int, int]]] = deque(maxlen=HP_LOG_SIZE)
         self._last_register_log: float | None = None
+        self._energy: dict[int, int] = {}
+        # When each energy block is due, and why its last read failed.
+        self._energy_due = dict.fromkeys(HP_ENERGY_BLOCKS, 0.0)
+        self.energy_errors: dict[int, str] = {}
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from Epever device."""
         try:
             async with self.modbus_lock:
-                data = await self.hass.async_add_executor_job(
-                    self._get_data, self.host, self.port, self.unit_id
-                )
+                if self.device_type == DEVICE_TYPE_HP:
+                    data = await self._async_get_hp_data()
+                else:
+                    data = await self.hass.async_add_executor_job(
+                        get_all_data, self.host, self.port, self.unit_id
+                    )
             if data is None:
                 raise UpdateFailed("Failed to retrieve data from device")
         except Exception as err:
@@ -125,6 +133,36 @@ class EpeverDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._log_registers(data)
         return data
 
+    async def _async_get_hp_data(self) -> dict[str, Any]:
+        """Read the HP inverter, with at most one energy block that is due.
+
+        One per poll bounds the time lost to unanswered reads, and keeps a
+        silent block from hiding the others.
+        """
+        block: tuple[int, int] | None = None
+        # Not on the first poll: an unanswered read must not delay the setup.
+        if self.data is not None:
+            block = min(HP_ENERGY_BLOCKS, key=self._energy_due.__getitem__)
+            if self._energy_due[block] > time.monotonic():
+                block = None
+        data = await self.hass.async_add_executor_job(
+            get_hp_data, self.host, self.port, self.unit_id, block
+        )
+        if block is not None:
+            address = block[0]
+            # Keep the last counters over a failed read.
+            self._energy = {**self._energy, **data["energy"]}
+            self._energy_due[block] = time.monotonic() + (
+                HP_ENERGY_INTERVAL
+                if address in self._energy
+                else HP_ENERGY_RETRY_INTERVAL
+            )
+            if data["energy_error"] is None:
+                self.energy_errors.pop(address, None)
+            else:
+                self.energy_errors[address] = data["energy_error"]
+        return {"registers": data["registers"], "energy": self._energy}
+
     def _log_registers(self, data: dict[str, Any]) -> None:
         """Keep a register snapshot every HP_LOG_INTERVAL seconds."""
         now = time.monotonic()
@@ -134,7 +172,10 @@ class EpeverDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ):
             self._last_register_log = now
             self.register_log.append(
-                (dt_util.utcnow().isoformat(timespec="seconds"), data["registers"])
+                (
+                    dt_util.utcnow().isoformat(timespec="seconds"),
+                    {**data["energy"], **data["registers"]},
+                )
             )
 
     def _require_tracer(self) -> None:

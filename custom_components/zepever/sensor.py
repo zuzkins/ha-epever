@@ -316,20 +316,16 @@ class EpeverSensor(CoordinatorEntity[EpeverDataUpdateCoordinator], SensorEntity)
 
 
 class EpeverHpSensor(EpeverSensor):
-    """Sensor decoded from a register of the HP inverter."""
+    """Sensor decoded from registers of the HP inverter."""
 
     entity_description: HpSensorEntityDescription
 
     @property
-    def native_value(self) -> float | None:
-        """Return the scaled signed register value."""
+    def native_value(self) -> float | str | None:
+        """Return the decoded value."""
         if self.coordinator.data is None:
             return None
-        description = self.entity_description
-        value = self.coordinator.data["registers"][description.address]
-        if value > 0x7FFF:
-            value -= 0x10000
-        return value / description.divisor if description.divisor > 1 else value
+        return self.entity_description.decode(self.coordinator.data)
 
 
 class EpeverConnectionQualitySensor(EpeverSensor):

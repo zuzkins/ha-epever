@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
@@ -22,6 +23,7 @@ from .const import (
     SERVICE_FORCE_MPPT_REACQUIRE,
 )
 from .coordinator import EpeverDataUpdateCoordinator
+from .hp_sensor import HP_DEBUG_KEY_PREFIX, HP_SENSOR_DESCRIPTIONS
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -31,8 +33,8 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
 ]
 
-# Everything but the sensors writes to, or reads registers of, the Tracer.
-READ_ONLY_PLATFORMS: list[Platform] = [Platform.SENSOR]
+# The other platforms write to the Tracer.
+READ_ONLY_PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SENSOR]
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -56,6 +58,16 @@ def _is_tracer(entry: EpeverConfigEntry) -> bool:
 def _platforms(entry: EpeverConfigEntry) -> list[Platform]:
     """Return the platforms the device type supports."""
     return PLATFORMS if _is_tracer(entry) else READ_ONLY_PLATFORMS
+
+
+def _remove_stale_debug_entities(hass: HomeAssistant, entry: EpeverConfigEntry) -> None:
+    """Remove debug sensors that were confirmed or dropped since."""
+    prefix = f"{entry.entry_id}_{HP_DEBUG_KEY_PREFIX}"
+    current = {f"{entry.entry_id}_{d.key}" for d in HP_SENSOR_DESCRIPTIONS}
+    registry = er.async_get(hass)
+    for entity in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if entity.unique_id.startswith(prefix) and entity.unique_id not in current:
+            registry.async_remove(entity.entity_id)
 
 
 def _async_resolve_entry(hass: HomeAssistant, call: ServiceCall) -> EpeverConfigEntry:
@@ -106,6 +118,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: EpeverConfigEntry) -> bo
     await coordinator.async_config_entry_first_refresh()
 
     entry.runtime_data = coordinator
+
+    if not _is_tracer(entry):
+        _remove_stale_debug_entities(hass, entry)
 
     await hass.config_entries.async_forward_entry_setups(entry, _platforms(entry))
 

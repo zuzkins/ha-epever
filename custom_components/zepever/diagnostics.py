@@ -32,7 +32,13 @@ async def async_get_config_entry_diagnostics(
     }
     data = coordinator.data or {}
     if coordinator.device_type == DEVICE_TYPE_HP:
-        result["registers"] = _dump(data.get("registers", {}))
+        result["registers"] = _dump(
+            {**data.get("energy", {}), **data.get("registers", {})}
+        )
+        result["energy_errors"] = {
+            f"0x{address:04X}": error
+            for address, error in coordinator.energy_errors.items()
+        }
         result["register_log"] = [
             {"time": when, "registers": _dump(registers)}
             for when, registers in coordinator.register_log

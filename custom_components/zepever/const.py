@@ -71,6 +71,9 @@ LOAD_CONTROL_MODES = {
 
 # Raw register log of the HP inverter, for the diagnostics download.
 HP_LOG_INTERVAL = 300  # seconds
+# Energy blocks may go unanswered, which costs seconds per attempt.
+HP_ENERGY_INTERVAL = 300  # seconds
+HP_ENERGY_RETRY_INTERVAL = 3600  # seconds, until a block has answered once
 HP_LOG_SIZE = 288  # snapshots, 24 h
 
 # MPPT reacquire experiment (docs/epever_mppt_reacquire_experiment.md)
