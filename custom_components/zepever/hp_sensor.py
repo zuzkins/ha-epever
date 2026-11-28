@@ -173,6 +173,8 @@ HP_SENSOR_DESCRIPTIONS: tuple[HpSensorEntityDescription, ...] = (
     _measurement("battery_voltage", "Battery Voltage", 0x3021, _VOLT, 10),
     # Negative while discharging.
     _measurement("battery_current", "Battery Current", 0x3022, _AMPERE, 10, True),
+    # Not in the app, but battery voltage x current; negative while discharging.
+    _measurement("battery_power", "Battery Power", 0x3024, _WATT, signed=True),
     _measurement(
         "battery_state_of_charge", "Battery State of Charge", 0x3023, PERCENTAGE
     ),
@@ -220,7 +222,6 @@ HP_SENSOR_DESCRIPTIONS: tuple[HpSensorEntityDescription, ...] = (
     _debug(0x301B, "Load power", _WATT, signed=True),
     _debug(0x3020, "DC bus voltage", _VOLT, 10),
     # Steady 25.0 in every dump, possibly without a probe.
-    _debug(0x3024, "Battery power", _WATT, signed=True),
     _debug(0x3030, "Battery temperature", _CELSIUS, 10, True),
     _debug(0x3032, "Temperature 3", _CELSIUS, 10, True),
     _debug(0x3033, "Temperature 4", _CELSIUS, 10, True),

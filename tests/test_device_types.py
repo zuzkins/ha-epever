@@ -78,7 +78,7 @@ async def test_hp_night_dump(hass, hp_dongle):
         "grid_power": 817,
         "load_power": 818,
         "hp_debug_301b": 757,
-        "hp_debug_3024": -20,
+        "battery_power": -20,
     }
     for key, value in expected.items():
         assert float(state(hass, entry, key).state) == value
