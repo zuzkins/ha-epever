@@ -12,6 +12,14 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.zepever.diagnostics import async_get_config_entry_diagnostics
 
 DOMAIN = "zepever"
+ENERGY_TOTALS = (
+    "pv1_energy_total",
+    "pv2_energy_total",
+    "utility_charging_total",
+    "load_usage_total",
+    "generation_total",
+    "usage_total",
+)
 
 
 def data_for(dongle, device_type=None):
@@ -74,7 +82,8 @@ async def test_hp_night_dump(hass, hp_dongle):
     assert fault.attributes["faults"] == fault.attributes["notices"] == []
     for entity in entities(hass, entry):
         attributes = hass.states.get(entity.entity_id).attributes
-        assert attributes.get("device_class") != "energy"
+        if attributes.get("device_class") == "energy":
+            assert entity.unique_id.endswith(ENERGY_TOTALS)
         if "hp_debug" in entity.unique_id:
             assert "state_class" not in attributes
             assert "device_class" not in attributes
@@ -132,7 +141,14 @@ async def test_hp_energy(hass, hp_dongle):
     await hass.async_block_till_done()
     assert energy_requests(hp_dongle) == [0x1000, 0x1018, 0x102A, 0x1046, 0x1056]
     assert float(state(hass, entry, "hp_debug_1000").state) == 7
-    assert float(state(hass, entry, "hp_debug_104c").state) == 0x20001
+    total = state(hass, entry, "generation_total")
+    assert float(total.state) == 0x20001
+    assert total.attributes["device_class"] == "energy"
+    assert total.attributes["state_class"] == "total_increasing"
+    assert total.attributes["unit_of_measurement"] == "kWh"
+    for key in ENERGY_TOTALS:
+        assert state(hass, entry, key).attributes["state_class"] == "total_increasing"
+    assert float(state(hass, entry, "usage_total").state) == 0
     assert coordinator.energy_errors == {}
     result = await async_get_config_entry_diagnostics(hass, entry)
     assert "0x1000" in result["registers"]

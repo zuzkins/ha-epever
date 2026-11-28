@@ -4,7 +4,9 @@ Registers are named after the HP-AH definitions in EPEVER's Solar Guardian
 app. Values the app doesn't list, or whose unit or scale is in doubt, are debug
 sensors with a question mark: diagnostic, keyed by address and without a state
 class or device class, so they can't end up in long-term statistics or the
-Energy dashboard.
+Energy dashboard. The lifetime energy totals are the exception: they are
+named energy sensors so the Energy dashboard offers them, although their
+scale is only the app's word so far.
 """
 
 from __future__ import annotations
@@ -116,6 +118,20 @@ def _status(
     )
 
 
+def _energy_total(key: str, name: str, address: int) -> HpSensorEntityDescription:
+    """Describe a lifetime energy counter for the Energy dashboard."""
+    return HpSensorEntityDescription(
+        key=key,
+        name=name,
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        address=address,
+        energy=True,
+        long=True,
+    )
+
+
 def _debug(
     address: int,
     name: str,
@@ -213,15 +229,15 @@ HP_SENSOR_DESCRIPTIONS: tuple[HpSensorEntityDescription, ...] = (
     # The app applies no scale to the counters; whole kWh looks coarse.
     _debug(0x1057, "Total PV power", _WATT, energy=True),
     _debug(0x1000, "PV1 energy today", _KWH, energy=True, long=True),
-    _debug(0x1006, "PV1 energy total", _KWH, energy=True, long=True),
+    _energy_total("pv1_energy_total", "PV1 Energy Total", 0x1006),
     _debug(0x1008, "PV2 energy today", _KWH, energy=True, long=True),
-    _debug(0x100E, "PV2 energy total", _KWH, energy=True, long=True),
+    _energy_total("pv2_energy_total", "PV2 Energy Total", 0x100E),
     _debug(0x101A, "Utility charging today", _KWH, energy=True, long=True),
-    _debug(0x1020, "Utility charging total", _KWH, energy=True, long=True),
+    _energy_total("utility_charging_total", "Total Utility Charging", 0x1020),
     _debug(0x102A, "Load energy today", _KWH, energy=True, long=True),
-    _debug(0x1030, "Load energy total", _KWH, energy=True, long=True),
+    _energy_total("load_usage_total", "Total Load Usage", 0x1030),
     _debug(0x1046, "Generation today", _KWH, energy=True, long=True),
-    _debug(0x104C, "Generation total", _KWH, energy=True, long=True),
+    _energy_total("generation_total", "Total Generation", 0x104C),
     _debug(0x104E, "Usage today", _KWH, energy=True, long=True),
-    _debug(0x1054, "Usage total", _KWH, energy=True, long=True),
+    _energy_total("usage_total", "Total Usage", 0x1054),
 )
