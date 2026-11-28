@@ -45,7 +45,7 @@ from .epever_com import (
     set_load_control_mode,
     set_manual_load_output,
 )
-from .hp_com import HP_ENERGY_BLOCKS, get_hp_data
+from .hp_com import HP_ENERGY_BLOCKS, HP_PV_POWER_BLOCK, get_hp_data
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -88,8 +88,9 @@ class EpeverDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_register_log: float | None = None
         self._energy: dict[int, int] = {}
         # When each energy block is due, and why its last read failed.
-        self._energy_due = dict.fromkeys(HP_ENERGY_BLOCKS, 0.0)
+        self._energy_due = dict.fromkeys((*HP_ENERGY_BLOCKS, HP_PV_POWER_BLOCK), 0.0)
         self.energy_errors: dict[int, str] = {}
+        self._answered_blocks: set[tuple[int, int]] = set()
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from Epever device."""
@@ -134,33 +135,50 @@ class EpeverDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return data
 
     async def _async_get_hp_data(self) -> dict[str, Any]:
-        """Read the HP inverter, with at most one energy block that is due.
+        """Read the HP inverter, with the blocks outside the live one that are due.
 
-        One per poll bounds the time lost to unanswered reads, and keeps a
-        silent block from hiding the others.
+        Total PV power is due on every poll. Of the energy blocks at most one
+        is read per poll, which bounds the time lost to unanswered reads and
+        keeps a silent block from hiding the others.
         """
-        block: tuple[int, int] | None = None
+        blocks: list[tuple[int, int]] = []
+        now = time.monotonic()
         # Not on the first poll: an unanswered read must not delay the setup.
         if self.data is not None:
+            if self._energy_due[HP_PV_POWER_BLOCK] <= now:
+                blocks.append(HP_PV_POWER_BLOCK)
             block = min(HP_ENERGY_BLOCKS, key=self._energy_due.__getitem__)
-            if self._energy_due[block] > time.monotonic():
-                block = None
+            if self._energy_due[block] <= now:
+                blocks.append(block)
         data = await self.hass.async_add_executor_job(
-            get_hp_data, self.host, self.port, self.unit_id, block
+            get_hp_data, self.host, self.port, self.unit_id, blocks
         )
-        if block is not None:
-            address = block[0]
-            # Keep the last counters over a failed read.
-            self._energy = {**self._energy, **data["energy"]}
-            self._energy_due[block] = time.monotonic() + (
-                HP_ENERGY_INTERVAL
-                if address in self._energy
-                else HP_ENERGY_RETRY_INTERVAL
-            )
-            if data["energy_error"] is None:
+        energy = {**self._energy, **data["energy"]}
+        now = time.monotonic()
+        for block in blocks:
+            address, count = block
+            error = data["energy_errors"].get(address)
+            if error is None and address not in data["energy"]:
+                # Skipped after an earlier block failed.
+                continue
+            if error is None:
+                self._answered_blocks.add(block)
                 self.energy_errors.pop(address, None)
             else:
-                self.energy_errors[address] = data["energy_error"]
+                self.energy_errors[address] = error
+            if block == HP_PV_POWER_BLOCK:
+                interval = 0.0
+                if error is not None:
+                    # Counters keep their last value, but power must not.
+                    for stale in range(address, address + count):
+                        energy.pop(stale, None)
+                    interval = HP_ENERGY_INTERVAL
+            else:
+                interval = HP_ENERGY_INTERVAL
+            if block not in self._answered_blocks:
+                interval = HP_ENERGY_RETRY_INTERVAL
+            self._energy_due[block] = now + interval
+        self._energy = energy
         return {"registers": data["registers"], "energy": self._energy}
 
     def _log_registers(self, data: dict[str, Any]) -> None:

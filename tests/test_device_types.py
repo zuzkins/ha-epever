@@ -148,7 +148,10 @@ async def test_hp_energy(hass, hp_dongle):
     for _ in range(7):
         await coordinator.async_refresh()
     await hass.async_block_till_done()
-    assert energy_requests(hp_dongle) == [0x1000, 0x1018, 0x102A, 0x1046, 0x1056]
+    requests = energy_requests(hp_dongle)
+    assert [a for a in requests if a != 0x1056] == [0x1000, 0x1018, 0x102A, 0x1046]
+    # Total PV power is read on every poll but the first.
+    assert requests.count(0x1056) == 7
     assert float(state(hass, entry, "pv1_energy_today").state) == 7
     total = state(hass, entry, "generation_total")
     assert float(total.state) == 0x20001
@@ -161,6 +164,34 @@ async def test_hp_energy(hass, hp_dongle):
     assert coordinator.energy_errors == {}
     result = await async_get_config_entry_diagnostics(hass, entry)
     assert "0x1000" in result["registers"]
+
+
+async def test_hp_pv_power(hass, hp_dongle):
+    """Total PV power follows every poll and is never shown stale."""
+    hp_dongle.registers |= {0x1056: 0, 0x1057: 529}
+    entry = await setup(hass, hp_dongle, "hp_inverter")
+    coordinator = entry.runtime_data
+    assert state(hass, entry, "pv_power").state == "unknown"
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    pv_power = state(hass, entry, "pv_power")
+    assert float(pv_power.state) == 529
+    assert pv_power.attributes["device_class"] == "power"
+    hp_dongle.registers[0x1057] = 700
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert float(state(hass, entry, "pv_power").state) == 700
+
+    # Unanswered: unknown, live data unaffected, and retried after a while.
+    del hp_dongle.registers[0x1056], hp_dongle.registers[0x1057]
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert coordinator.last_update_success
+    assert state(hass, entry, "pv_power").state == "unknown"
+    assert float(state(hass, entry, "battery_voltage").state) == 50.4
+    assert 0x1056 in coordinator.energy_errors
+    due = coordinator._energy_due[(0x1056, 2)] - time.monotonic()
+    assert 290 < due < 301
 
 
 async def test_hp_silent_energy_block(hass, hp_dongle):
@@ -203,7 +234,7 @@ async def test_hp_removes_old_debug_entities(hass, hp_dongle):
     entry = MockConfigEntry(domain=DOMAIN, data=data_for(hp_dongle, "hp_inverter"))
     entry.add_to_hass(hass)
     registry = er.async_get(hass)
-    for address in ("300f", "3024"):
+    for address in ("300f", "3020"):
         registry.async_get_or_create(
             "sensor",
             DOMAIN,
@@ -214,7 +245,7 @@ async def test_hp_removes_old_debug_entities(hass, hp_dongle):
     await hass.async_block_till_done()
     ids = {e.unique_id for e in entities(hass, entry)}
     assert f"{entry.entry_id}_hp_debug_300f" not in ids
-    assert f"{entry.entry_id}_hp_debug_3024" in ids
+    assert f"{entry.entry_id}_hp_debug_3020" in ids
 
 
 async def test_hp_rejects_writes(hass, hp_dongle):

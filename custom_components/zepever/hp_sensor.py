@@ -219,13 +219,21 @@ HP_SENSOR_DESCRIPTIONS: tuple[HpSensorEntityDescription, ...] = (
     # Not in the app, and read above the Load Power card's value.
     _debug(0x301B, "Load power", _WATT, signed=True),
     _debug(0x3020, "DC bus voltage", _VOLT, 10),
-    _debug(0x3024, "Battery power", _WATT, signed=True),
     # Steady 25.0 in every dump, possibly without a probe.
+    _debug(0x3024, "Battery power", _WATT, signed=True),
     _debug(0x3030, "Battery temperature", _CELSIUS, 10, True),
     _debug(0x3032, "Temperature 3", _CELSIUS, 10, True),
     _debug(0x3033, "Temperature 4", _CELSIUS, 10, True),
-    # Only refreshed with the energy blocks; PV1/PV2 power are live.
-    _debug(0x1057, "Total PV power", _WATT, energy=True),
+    HpSensorEntityDescription(
+        key="pv_power",
+        name="PV Power",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=_WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
+        address=0x1057,
+        energy=True,
+    ),
     # Whole kWh, unscaled as in the app, which they matched on a device.
     _energy("pv1_energy_today", "PV1 Energy Today", 0x1000),
     _energy("pv1_energy_total", "PV1 Energy Total", 0x1006),

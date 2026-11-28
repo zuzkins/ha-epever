@@ -8,6 +8,7 @@ unanswered instead of raising a Modbus exception.
 """
 
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 from pymodbus import FramerType
@@ -23,16 +24,18 @@ HP_REGISTER_COUNT = 200
 # Largest read verified on the device.
 HP_BLOCK_SIZE = 16
 
-# Energy counters and totals, (address, count). Listed by the app but not
-# verified on a device. Split so that no read spans undefined addresses. Each
-# is read on its own: any of them may go unanswered.
+# Energy counters and totals, (address, count), read every few minutes. Split
+# so that no read spans undefined addresses. Each is read on its own: any of
+# them may go unanswered.
 HP_ENERGY_BLOCKS = (
     (0x1000, 16),
     (0x1018, 10),
     (0x102A, 8),
     (0x1046, 16),
-    (0x1056, 2),
 )
+# Total PV power and its neighbour, outside the live block but read on every
+# poll like it.
+HP_PV_POWER_BLOCK = (0x1056, 2)
 
 # Fault bits: address -> bit -> name.
 HP_FAULTS: dict[int, dict[int, str]] = {
@@ -124,14 +127,16 @@ def get_hp_data(
     host: str,
     port: int,
     unit_id: int = 1,
-    energy_block: tuple[int, int] | None = None,
+    energy_blocks: Sequence[tuple[int, int]] = (),
 ) -> dict[str, Any]:
-    """Read the live data block, and optionally one of HP_ENERGY_BLOCKS.
+    """Read the live data block, and optionally blocks outside it.
 
     Returns:
-        {"registers": {address: raw value}, "energy": ..., "energy_error": ...}.
-        "energy" has the same shape as "registers" and is empty when not
-        requested or unreadable.
+        {"registers": {address: raw value}, "energy": ..., "energy_errors": ...}.
+        "energy" has the same shape as "registers" and holds the blocks that
+        were read; "energy_errors" maps the first address of a failed block to
+        its error. After a failure the remaining blocks are not read, and
+        appear in neither.
 
     Raises:
         EpeverReadError: if connecting or any live block read fails. Energy
@@ -159,23 +164,24 @@ def get_hp_data(
             registers.update(enumerate(values, address))
 
         energy: dict[int, int] = {}
-        energy_error: str | None = None
-        if energy_block is not None:
-            # Last, because a timed-out RTU stream can't be trusted afterwards.
-            address, count = energy_block
+        energy_errors: dict[int, str] = {}
+        # After the live block, and stopping at the first failure, because a
+        # timed-out RTU stream can't be trusted afterwards.
+        for address, count in energy_blocks:
             try:
                 values = _read_segment(client, "hp_energy", address, count, unit_id)
-                if values is None:
-                    energy_error = "error or short response"
-                else:
-                    energy.update(enumerate(values, address))
             except EpeverReadError as err:
-                energy_error = str(err)
+                energy_errors[address] = str(err)
                 _LOGGER.debug("Energy block not readable: %s", err)
+                break
+            if values is None:
+                energy_errors[address] = "error or short response"
+                break
+            energy.update(enumerate(values, address))
         return {
             "registers": registers,
             "energy": energy,
-            "energy_error": energy_error,
+            "energy_errors": energy_errors,
         }
     finally:
         client.close()
