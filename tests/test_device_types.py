@@ -20,6 +20,14 @@ ENERGY_TOTALS = (
     "generation_total",
     "usage_total",
 )
+ENERGY_TODAY = (
+    "pv1_energy_today",
+    "pv2_energy_today",
+    "utility_charging_today",
+    "load_usage_today",
+    "generation_today",
+    "usage_today",
+)
 
 
 def data_for(dongle, device_type=None):
@@ -67,7 +75,8 @@ async def test_hp_night_dump(hass, hp_dongle):
         "battery_state_of_charge": 96,
         "pv1_voltage": 0,
         "pv_temperature": 23.4,
-        "hp_debug_301a": 818,
+        "grid_power": 817,
+        "load_power": 818,
         "hp_debug_301b": 757,
         "hp_debug_3024": -20,
     }
@@ -83,7 +92,7 @@ async def test_hp_night_dump(hass, hp_dongle):
     for entity in entities(hass, entry):
         attributes = hass.states.get(entity.entity_id).attributes
         if attributes.get("device_class") == "energy":
-            assert entity.unique_id.endswith(ENERGY_TOTALS)
+            assert entity.unique_id.endswith(ENERGY_TOTALS + ENERGY_TODAY)
         if "hp_debug" in entity.unique_id:
             assert "state_class" not in attributes
             assert "device_class" not in attributes
@@ -134,19 +143,19 @@ async def test_hp_energy(hass, hp_dongle):
     hp_dongle.registers |= {a: 0 for a in range(0x1000, 0x1058)}
     hp_dongle.registers |= {0x1000: 7, 0x104C: 1, 0x104D: 2}
     entry = await setup(hass, hp_dongle, "hp_inverter")
-    assert state(hass, entry, "hp_debug_1000").state == "unknown"
+    assert state(hass, entry, "pv1_energy_today").state == "unknown"
     coordinator = entry.runtime_data
     for _ in range(7):
         await coordinator.async_refresh()
     await hass.async_block_till_done()
     assert energy_requests(hp_dongle) == [0x1000, 0x1018, 0x102A, 0x1046, 0x1056]
-    assert float(state(hass, entry, "hp_debug_1000").state) == 7
+    assert float(state(hass, entry, "pv1_energy_today").state) == 7
     total = state(hass, entry, "generation_total")
     assert float(total.state) == 0x20001
     assert total.attributes["device_class"] == "energy"
     assert total.attributes["state_class"] == "total_increasing"
     assert total.attributes["unit_of_measurement"] == "kWh"
-    for key in ENERGY_TOTALS:
+    for key in ENERGY_TOTALS + ENERGY_TODAY:
         assert state(hass, entry, key).attributes["state_class"] == "total_increasing"
     assert float(state(hass, entry, "usage_total").state) == 0
     assert coordinator.energy_errors == {}
@@ -164,8 +173,8 @@ async def test_hp_silent_energy_block(hass, hp_dongle):
         assert coordinator.last_update_success
         assert coordinator.consecutive_failures == 0
     await hass.async_block_till_done()
-    assert float(state(hass, entry, "hp_debug_102a").state) == 0x30003
-    assert state(hass, entry, "hp_debug_1000").state == "unknown"
+    assert float(state(hass, entry, "load_usage_today").state) == 0x30003
+    assert state(hass, entry, "pv1_energy_today").state == "unknown"
     assert float(state(hass, entry, "battery_voltage").state) == 50.4
     assert set(coordinator.energy_errors) == {0x1000, 0x1018, 0x1046, 0x1056}
 
@@ -185,7 +194,7 @@ async def test_hp_silent_energy_block(hass, hp_dongle):
     await coordinator.async_refresh()
     await hass.async_block_till_done()
     assert 0x102A in coordinator.energy_errors
-    assert float(state(hass, entry, "hp_debug_102a").state) == 0x30003
+    assert float(state(hass, entry, "load_usage_today").state) == 0x30003
     assert coordinator._energy_due[(0x102A, 8)] - time.monotonic() < 301
 
 
@@ -194,7 +203,7 @@ async def test_hp_removes_old_debug_entities(hass, hp_dongle):
     entry = MockConfigEntry(domain=DOMAIN, data=data_for(hp_dongle, "hp_inverter"))
     entry.add_to_hass(hass)
     registry = er.async_get(hass)
-    for address in ("300f", "3012"):
+    for address in ("300f", "3024"):
         registry.async_get_or_create(
             "sensor",
             DOMAIN,
@@ -205,7 +214,7 @@ async def test_hp_removes_old_debug_entities(hass, hp_dongle):
     await hass.async_block_till_done()
     ids = {e.unique_id for e in entities(hass, entry)}
     assert f"{entry.entry_id}_hp_debug_300f" not in ids
-    assert f"{entry.entry_id}_hp_debug_3012" in ids
+    assert f"{entry.entry_id}_hp_debug_3024" in ids
 
 
 async def test_hp_rejects_writes(hass, hp_dongle):

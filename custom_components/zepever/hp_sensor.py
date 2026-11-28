@@ -4,9 +4,8 @@ Registers are named after the HP-AH definitions in EPEVER's Solar Guardian
 app. Values the app doesn't list, or whose unit or scale is in doubt, are debug
 sensors with a question mark: diagnostic, keyed by address and without a state
 class or device class, so they can't end up in long-term statistics or the
-Energy dashboard. The lifetime energy totals are the exception: they are
-named energy sensors so the Energy dashboard offers them, although their
-scale is only the app's word so far.
+Energy dashboard. The app's energy counters are named energy sensors:
+they matched the app on a device.
 """
 
 from __future__ import annotations
@@ -21,7 +20,6 @@ from homeassistant.components.sensor import (
 from homeassistant.const import (
     PERCENTAGE,
     EntityCategory,
-    UnitOfApparentPower,
     UnitOfElectricCurrent,
     UnitOfElectricPotential,
     UnitOfEnergy,
@@ -118,8 +116,8 @@ def _status(
     )
 
 
-def _energy_total(key: str, name: str, address: int) -> HpSensorEntityDescription:
-    """Describe a lifetime energy counter for the Energy dashboard."""
+def _energy(key: str, name: str, address: int) -> HpSensorEntityDescription:
+    """Describe an energy counter in whole kWh, daily or lifetime."""
     return HpSensorEntityDescription(
         key=key,
         name=name,
@@ -159,7 +157,6 @@ _VOLT = UnitOfElectricPotential.VOLT
 _AMPERE = UnitOfElectricCurrent.AMPERE
 _HERTZ = UnitOfFrequency.HERTZ
 _WATT = UnitOfPower.WATT
-_VA = UnitOfApparentPower.VOLT_AMPERE
 _CELSIUS = UnitOfTemperature.CELSIUS
 _KWH = UnitOfEnergy.KILO_WATT_HOUR
 
@@ -170,6 +167,9 @@ HP_SENSOR_DESCRIPTIONS: tuple[HpSensorEntityDescription, ...] = (
     _measurement("load_voltage", "Load Voltage", 0x3013, _VOLT, 10),
     _measurement("load_current", "Load Current", 0x3016, _AMPERE, 10),
     _measurement("load_frequency", "Load Frequency", 0x3019, _HERTZ, 10),
+    # The app's Utility Power and Load Power cards.
+    _measurement("grid_power", "Grid Power", 0x3012, _WATT),
+    _measurement("load_power", "Load Power", 0x301A, _WATT),
     _measurement("battery_voltage", "Battery Voltage", 0x3021, _VOLT, 10),
     # Negative while discharging.
     _measurement("battery_current", "Battery Current", 0x3022, _AMPERE, 10, True),
@@ -216,9 +216,7 @@ HP_SENSOR_DESCRIPTIONS: tuple[HpSensorEntityDescription, ...] = (
         2,
         {1: "normal", 2: "abnormal"},
     ),
-    # The app says W, but the value equals V x A.
-    _debug(0x3012, "Grid power", _VA),
-    _debug(0x301A, "Load apparent power", _VA),
+    # Not in the app, and read above the Load Power card's value.
     _debug(0x301B, "Load power", _WATT, signed=True),
     _debug(0x3020, "DC bus voltage", _VOLT, 10),
     _debug(0x3024, "Battery power", _WATT, signed=True),
@@ -226,18 +224,19 @@ HP_SENSOR_DESCRIPTIONS: tuple[HpSensorEntityDescription, ...] = (
     _debug(0x3030, "Battery temperature", _CELSIUS, 10, True),
     _debug(0x3032, "Temperature 3", _CELSIUS, 10, True),
     _debug(0x3033, "Temperature 4", _CELSIUS, 10, True),
-    # The app applies no scale to the counters; whole kWh looks coarse.
+    # Only refreshed with the energy blocks; PV1/PV2 power are live.
     _debug(0x1057, "Total PV power", _WATT, energy=True),
-    _debug(0x1000, "PV1 energy today", _KWH, energy=True, long=True),
-    _energy_total("pv1_energy_total", "PV1 Energy Total", 0x1006),
-    _debug(0x1008, "PV2 energy today", _KWH, energy=True, long=True),
-    _energy_total("pv2_energy_total", "PV2 Energy Total", 0x100E),
-    _debug(0x101A, "Utility charging today", _KWH, energy=True, long=True),
-    _energy_total("utility_charging_total", "Total Utility Charging", 0x1020),
-    _debug(0x102A, "Load energy today", _KWH, energy=True, long=True),
-    _energy_total("load_usage_total", "Total Load Usage", 0x1030),
-    _debug(0x1046, "Generation today", _KWH, energy=True, long=True),
-    _energy_total("generation_total", "Total Generation", 0x104C),
-    _debug(0x104E, "Usage today", _KWH, energy=True, long=True),
-    _energy_total("usage_total", "Total Usage", 0x1054),
+    # Whole kWh, unscaled as in the app, which they matched on a device.
+    _energy("pv1_energy_today", "PV1 Energy Today", 0x1000),
+    _energy("pv1_energy_total", "PV1 Energy Total", 0x1006),
+    _energy("pv2_energy_today", "PV2 Energy Today", 0x1008),
+    _energy("pv2_energy_total", "PV2 Energy Total", 0x100E),
+    _energy("utility_charging_today", "Utility Charging Today", 0x101A),
+    _energy("utility_charging_total", "Total Utility Charging", 0x1020),
+    _energy("load_usage_today", "Load Usage Today", 0x102A),
+    _energy("load_usage_total", "Total Load Usage", 0x1030),
+    _energy("generation_today", "Generation Today", 0x1046),
+    _energy("generation_total", "Total Generation", 0x104C),
+    _energy("usage_today", "Usage Today", 0x104E),
+    _energy("usage_total", "Total Usage", 0x1054),
 )
